@@ -656,11 +656,41 @@ function App() {
     setWahaModalOpen(true);
   };
 
+  const promptWahaScoreNotification = ({ username: uName, pointsDelta, eventTypeName, description, newScore, certName }) => {
+    let msg = '';
+    if (certName) {
+      msg = `*🏅 HIERARQUIA & MÉRITO ILC*\n\n` +
+        `👤 *Cidadão:* @${uName}\n` +
+        `📜 *Certificado Outorgado:* ${certName}\n` +
+        `\n_Mensagem Oficial — Índice de Lealdade Cívica (ILC)_`;
+    } else {
+      const deltaText = pointsDelta > 0 ? `+${pointsDelta}` : `${pointsDelta}`;
+      const symbol = pointsDelta >= 0 ? '➕' : '➖';
+      msg = `*⚡ NOTIFICAÇÃO DE PONTUAÇÃO ILC*\n\n` +
+        `👤 *Usuário:* @${uName}\n` +
+        `${symbol} *Variação:* ${deltaText} pontos\n` +
+        (eventTypeName ? `🏷️ *Atividade:* ${eventTypeName}\n` : '') +
+        (description ? `📝 *Motivo:* ${description}\n` : '') +
+        (newScore !== undefined && newScore !== null ? `📊 *Novo Saldo ILC:* ${newScore} pts\n` : '') +
+        `\n_Mensagem Oficial — Índice de Lealdade Cívica (ILC)_`;
+    }
+
+    if (window.confirm(`Deseja notificar esta alteração no grupo do WhatsApp?`)) {
+      setWahaEvent(null);
+      setWahaCustomMessage(msg);
+      setWahaModalOpen(true);
+    }
+  };
+
   const handleSendWahaWebhook = async (e) => {
     e.preventDefault();
     setWahaSending(true);
     try {
-      const res = await fetchWithTimeout(`${API_BASE}/democracy-events/${wahaEvent.id}/send-webhook`, {
+      const endpoint = wahaEvent
+        ? `${API_BASE}/democracy-events/${wahaEvent.id}/send-webhook`
+        : `${API_BASE}/whatsapp/send-notification`;
+
+      const res = await fetchWithTimeout(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -682,6 +712,7 @@ function App() {
       setWahaSending(false);
     }
   };
+
 
   const resetEventForm = () => {
     setNewEventTitle('');
@@ -1009,6 +1040,13 @@ function App() {
     }
 
     try {
+      const targetCitizen = adminCitizens.find(c => String(c.id) === String(quickCitizenId));
+      const targetType = eventTypes.find(t => t.code === quickEventCode);
+      const uName = targetCitizen ? targetCitizen.username : 'Usuário';
+      const typeName = targetType ? targetType.name : quickEventCode;
+      const ptsDelta = targetType ? targetType.points_delta : 0;
+      const desc = quickDescription;
+
       const res = await fetchWithTimeout(`${API_BASE}/admin/events`, {
         method: 'POST',
         headers: {
@@ -1026,10 +1064,21 @@ function App() {
       const data = await parseApiResponse(res);
       if (!res.ok) throw new Error(data.error);
 
+      const calculatedNewScore = targetCitizen && data.score_change ? data.score_change.new_score : (targetCitizen ? targetCitizen.current_score + ptsDelta : null);
+
       showToast('Lançamento Registrado', data.message, 'success');
       setQuickDescription('');
       setQuickEvidence('');
       fetchAdminMetrics();
+      fetchAdminCitizens();
+
+      promptWahaScoreNotification({
+        username: uName,
+        pointsDelta: ptsDelta,
+        eventTypeName: typeName,
+        description: desc,
+        newScore: quickApproveDirect ? calculatedNewScore : null
+      });
     } catch (err) {
       showToast('Erro de Lançamento', err.message || 'Falha ao lançar evento.', 'warning');
     }
@@ -1141,6 +1190,10 @@ function App() {
   const handleGrantManualCertificate = async () => {
     if (!detailCitizenData || !detailCertId) return;
     try {
+      const selectedCert = certificatesList.find(c => String(c.id) === String(detailCertId));
+      const certTitle = selectedCert ? selectedCert.name : 'Certificado de Mérito';
+      const citUser = detailCitizenData.citizen.username;
+
       const res = await fetchWithTimeout(`${API_BASE}/admin/certificates/grant`, {
         method: 'POST',
         headers: {
@@ -1158,6 +1211,11 @@ function App() {
       showToast('Certificado Outorgado', data.message, 'success');
       setDetailCertId('');
       fetchCitizenDetail(detailCitizenData.citizen.id);
+
+      promptWahaScoreNotification({
+        username: citUser,
+        certName: certTitle
+      });
     } catch (err) {
       showToast('Erro de Outorga', err.message || 'Falha ao outorgar certificado.', 'warning');
     }
@@ -1165,6 +1223,8 @@ function App() {
 
   const resolvePendingEvent = async (eventId, action) => {
     try {
+      const targetEv = adminMetrics && adminMetrics.pending_events ? adminMetrics.pending_events.find(e => String(e.id) === String(eventId)) : null;
+
       const res = await fetchWithTimeout(`${API_BASE}/admin/events/${eventId}/resolve`, {
         method: 'POST',
         headers: {
@@ -1178,10 +1238,21 @@ function App() {
 
       showToast('Evento Homologado', data.message, 'success');
       fetchAdminMetrics();
+
+      if (action === 'approved' && targetEv) {
+        promptWahaScoreNotification({
+          username: targetEv.citizen_name,
+          pointsDelta: targetEv.points_delta,
+          eventTypeName: targetEv.type_name,
+          description: targetEv.description,
+          newScore: data.score_change ? data.score_change.new_score : null
+        });
+      }
     } catch (err) {
       showToast('Falha na Resolução', err.message || 'Erro ao processar resolução.', 'warning');
     }
   };
+
 
   // FLUXO DE LOGIN & CADASTRO (CLIENTE)
   const handleLoginSubmit = async (e) => {
@@ -3064,7 +3135,9 @@ function App() {
         <div className="modal-card">
           <h2 className="modal-title">📲 ENVIAR PARA WHATSAPP</h2>
           <p className="modal-desc">
-            Envie uma mensagem sobre o evento diretamente para o grupo oficial da Democracia Gerenciada no WhatsApp.
+            {wahaEvent
+              ? 'Envie uma mensagem sobre o evento diretamente para o grupo oficial no WhatsApp.'
+              : 'Envie a notificação de pontuação/ação do usuário diretamente para o grupo oficial no WhatsApp.'}
           </p>
 
           <form onSubmit={handleSendWahaWebhook}>

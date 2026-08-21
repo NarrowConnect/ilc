@@ -1974,6 +1974,70 @@ app.post('/api/democracy-events/:id/send-webhook', authenticateToken, async (req
   }
 });
 
+// Disparar notificação WhatsApp genérica (para pontuações, certificados, ações)
+app.post('/api/whatsapp/send-notification', authenticateToken, async (req, res) => {
+  const { custom_message } = req.body;
+
+  if (!custom_message) {
+    return res.status(400).json({ error: 'Mensagem de notificação não fornecida.' });
+  }
+
+  const wahaBaseUrl = process.env.WAHA_BASE_URL;
+  const wahaApiKey  = process.env.WAHA_API_KEY;
+  const wahaSession = process.env.WAHA_SESSION || 'default';
+  const wahaChatId  = process.env.WAHA_DEFAULT_CHAT_ID;
+
+  if (!wahaBaseUrl || !wahaChatId) {
+    return res.status(500).json({ error: 'Integração WhatsApp não configurada no servidor. Verifique WAHA_BASE_URL e WAHA_DEFAULT_CHAT_ID no .env.' });
+  }
+
+  const wahaEndpoint = `${wahaBaseUrl.replace(/\/$/, '')}/api/sendText`;
+
+  try {
+    const wahaPayload = {
+      chatId: wahaChatId,
+      text: custom_message,
+      session: wahaSession
+    };
+
+    const wahaHeaders = {
+      'Content-Type': 'application/json'
+    };
+    if (wahaApiKey) {
+      wahaHeaders['X-Api-Key'] = wahaApiKey;
+    }
+
+    const response = await fetch(wahaEndpoint, {
+      method: 'POST',
+      headers: wahaHeaders,
+      body: JSON.stringify(wahaPayload)
+    });
+
+    const respText = await response.text();
+
+    await pool.query(
+      `INSERT INTO audit_logs (actor_user_id, entity_name, entity_id, action, new_data)
+       VALUES ($1, 'whatsapp_notifications', NULL, 'send_whatsapp_general_notification', $2)`,
+      [req.user.id, JSON.stringify({
+        endpoint: wahaEndpoint,
+        chat_id: wahaChatId,
+        session: wahaSession,
+        http_status: response.status,
+        message_snippet: custom_message.substring(0, 150)
+      })]
+    );
+
+    if (response.ok) {
+      return res.json({ success: true, message: '✅ Notificação enviada com sucesso para o WhatsApp!' });
+    } else {
+      return res.status(400).json({ error: `WAHA respondeu com erro ${response.status}: ${respText.substring(0, 200)}` });
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao enviar notificação WhatsApp: ' + err.message });
+  }
+});
+
+
 // ==========================================
 // ROTA PÚBLICA VISÃO CÍVICA (todos os usuários)
 // ==========================================
