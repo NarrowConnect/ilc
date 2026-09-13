@@ -2,9 +2,7 @@
   "appId": "com.ilc.cidadao",
   "appName": "ILC Cidadão",
   "webDir": "dist",
-  "bundledWebRuntime": false,
   "server": {
-    "androidScheme": "https",
-    "cleartext": true
+    "androidScheme": "https"
   }
 }

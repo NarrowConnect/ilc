@@ -1,4 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
 import ScoreChart from './components/ScoreChart';
 import CertificatesGrid from './components/CertificatesGrid';
 import logoNorml from './imgs/lgo_norml.webp';
@@ -65,23 +68,26 @@ export const parseSafeDate = (dateVal) => {
   return null;
 };
 
+const isNativeApp = Capacitor.isNativePlatform();
+
+// Deep link usado para devolver o login Google ao app nativo (Android intent-filter / iOS CFBundleURLTypes)
+const NATIVE_AUTH_SCHEME = 'com.ilc.cidadao';
+
+// Servidor usado pelo APK / app iOS (o site web usa caminho relativo /api)
+const PRODUCTION_SERVER_URL = 'https://ilc.designoh.cloud';
+
 const getApiBase = () => {
+  const toApiBase = (url) => {
+    const base = url.replace(/\/$/, '');
+    return base.endsWith('/api') ? base : base + '/api';
+  };
   try {
-    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE_URL) {
-      const base = import.meta.env.VITE_API_BASE_URL.replace(/\/$/, '');
-      return base.endsWith('/api') ? base : base + '/api';
-    }
-    const custom = safeStorage.getItem('ilc_server_url');
-    if (custom) {
-      const base = custom.replace(/\/$/, '');
-      return base.endsWith('/api') ? base : base + '/api';
-    }
-    if (typeof window !== 'undefined' && window.location) {
-      const proto = window.location.protocol;
-      if (proto === 'capacitor:' || proto === 'file:') {
-        return 'http://10.0.2.2:3000/api';
-      }
-    }
+    // Remove URL de servidor salva por versões antigas do APK (configuração manual foi descontinuada)
+    safeStorage.removeItem('ilc_server_url');
+    // Build mobile (vite build --mode mobile) pode sobrescrever a URL do servidor
+    if (import.meta.env.VITE_API_BASE_URL) return toApiBase(import.meta.env.VITE_API_BASE_URL);
+    // App nativo sempre fala com o servidor de produção, sem configuração do usuário
+    if (isNativeApp) return toApiBase(PRODUCTION_SERVER_URL);
   } catch (err) {
     console.warn('API base resolution fallback:', err);
   }
@@ -250,24 +256,6 @@ function App() {
   // Estado de Carregamento da Carteira
   const [citizenLoading, setCitizenLoading] = useState(false);
   const [citizenError, setCitizenError] = useState(null);
-
-  // Configuração de Servidor API (APK / Mobile)
-  const [serverModalOpen, setServerModalOpen] = useState(false);
-  const [customServerInput, setCustomServerInput] = useState(safeStorage.getItem('ilc_server_url') || '');
-
-  const handleSaveServerUrl = (e) => {
-    e.preventDefault();
-    if (!customServerInput.trim()) {
-      safeStorage.removeItem('ilc_server_url');
-    } else {
-      safeStorage.setItem('ilc_server_url', customServerInput.trim());
-    }
-    setServerModalOpen(false);
-    showToast('Servidor Configurado', 'Endereço da API atualizado. Reiniciando conexões...', 'success');
-    setTimeout(() => {
-      window.location.reload();
-    }, 800);
-  };
 
   // Disparar Notificação (Toast)
   const showToast = (title, desc, type = 'info') => {
@@ -463,8 +451,7 @@ function App() {
   }, [token, userRole]);
 
   // Capturar parâmetros do callback OAuth do Google
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+  const handleGoogleOAuthParams = (params) => {
     const googleToken = params.get('google_token');
     const googleRole = params.get('google_role');
     const googleUsername = params.get('google_username');
@@ -498,6 +485,25 @@ function App() {
       showToast('Erro Google OAuth', msgs[googleError] || 'Erro desconhecido.', 'warning');
       window.history.replaceState({}, '', '/');
     }
+  };
+
+  useEffect(() => {
+    handleGoogleOAuthParams(new URLSearchParams(window.location.search));
+
+    if (!isNativeApp) return;
+
+    // Retorno do login Google no app nativo: com.ilc.cidadao://auth?google_token=...
+    const listenerPromise = CapacitorApp.addListener('appUrlOpen', ({ url }) => {
+      if (!url || !url.startsWith(`${NATIVE_AUTH_SCHEME}://`)) return;
+      const queryIndex = url.indexOf('?');
+      if (queryIndex === -1) return;
+      Browser.close().catch(() => {});
+      handleGoogleOAuthParams(new URLSearchParams(url.slice(queryIndex + 1)));
+    });
+
+    return () => {
+      listenerPromise.then(listener => listener.remove());
+    };
   }, []);
 
   // Carregar dados da aba ativa
@@ -1371,11 +1377,23 @@ function App() {
     }
   };
 
-  const triggerGoogleSignup = () => {
+  const triggerGoogleSignup = async () => {
     const origin = window.location.origin;
     const baseAuthUrl = API_BASE.startsWith('http')
       ? `${API_BASE}/auth/google`
       : `${origin}${API_BASE.replace(/\/$/, '')}/auth/google`;
+
+    if (isNativeApp) {
+      // O Google bloqueia OAuth dentro de WebView: abre no navegador do sistema
+      // e o servidor devolve o resultado via deep link (tratado em appUrlOpen)
+      try {
+        await Browser.open({ url: `${baseAuthUrl}?platform=app` });
+      } catch (err) {
+        showToast('Erro Google OAuth', 'Não foi possível abrir o navegador para login.', 'warning');
+      }
+      return;
+    }
+
     const authUrl = `${baseAuthUrl}?origin=${encodeURIComponent(origin)}`;
     window.location.href = authUrl;
   };
@@ -1663,41 +1681,6 @@ function App() {
             </svg>
             CONECTAR COM A CONTA GOOGLE
           </button>
-
-          <div style={{ marginTop: '20px', textAlign: 'center' }}>
-            <button
-              type="button"
-              className="auth-link-btn"
-              onClick={() => setServerModalOpen(true)}
-              style={{ fontSize: '11px', opacity: 0.8 }}
-            >
-              ⚙️ Configurar Servidor da API (APK Mobile)
-            </button>
-          </div>
-        </div>
-
-        {/* Modal Servidor API (Mobile / APK) */}
-        <div className={`modal-overlay ${serverModalOpen ? 'active' : ''}`}>
-          <div className="modal-card">
-            <h2 className="modal-title">⚙️ ENDEREÇO DO SERVIDOR API</h2>
-            <p className="modal-desc">Configure o endereço do servidor backend quando estiver executando o app no Android Studio ou dispositivo físico.</p>
-            <form onSubmit={handleSaveServerUrl}>
-              <div className="form-group">
-                <label>URL DO SERVIDOR BACKEND</label>
-                <input
-                  type="text"
-                  placeholder="Ex: http://192.168.1.10:3000 ou https://meusistema.com"
-                  value={customServerInput}
-                  onChange={e => setCustomServerInput(e.target.value)}
-                />
-                <span className="field-desc">Emuladores usam http://10.0.2.2:3000 por padrão. Celulares físicos usam o IP da sua rede local. Deixe vazio para usar a URL padrão.</span>
-              </div>
-              <div className="form-buttons">
-                <button type="button" className="state-btn secondary" onClick={() => setServerModalOpen(false)}>CANCELAR</button>
-                <button type="submit" className="state-btn primary gold-glow">SALVAR E REINICIAR</button>
-              </div>
-            </form>
-          </div>
         </div>
 
         {/* Modal Nickname Google */}

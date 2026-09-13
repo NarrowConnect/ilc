@@ -73,6 +73,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'chave-secreta-patria-orgulho-ilc';
 // CONFIGURAÇÃO GOOGLE OAUTH (PASSPORT)
 // ==========================================
 
+const NATIVE_APP_STATE = 'app';
+const NATIVE_APP_SCHEME = 'com.ilc.cidadao';
+
 if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
   passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
@@ -98,7 +101,9 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     if (origin && req.session) {
       req.session.clientOrigin = origin;
     }
-    passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
+    // App nativo (APK/iOS): o parâmetro state volta do Google no callback e indica retorno via deep link
+    const state = req.query.platform === 'app' ? NATIVE_APP_STATE : undefined;
+    passport.authenticate('google', { scope: ['profile', 'email'], state })(req, res, next);
   });
 
   function getSafeAvatarForToken(avatarUrl) {
@@ -108,6 +113,9 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
   }
 
   function getRedirectTarget(req, queryString) {
+    if (req.query.state === NATIVE_APP_STATE) {
+      return `/api/auth/google/app-return?${queryString}`;
+    }
     let clientOrigin = (req.session && req.session.clientOrigin) ? req.session.clientOrigin : '';
     if (clientOrigin) {
       try {
@@ -214,6 +222,32 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         return res.redirect(getRedirectTarget(req, 'google_error=server'));
       }
     })(req, res, next);
+  });
+
+  // Página intermediária que devolve o resultado do login ao app nativo via deep link.
+  // Botão manual como fallback para navegadores que bloqueiam redirecionamento automático para esquemas customizados.
+  app.get('/api/auth/google/app-return', (req, res) => {
+    const query = new URLSearchParams(req.query).toString();
+    const deepLink = `${NATIVE_APP_SCHEME}://auth?${query}`;
+    const escapedLink = deepLink.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    res.set('Cache-Control', 'no-store');
+    res.send(`<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voltando ao ILC</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; background: #050B14; color: #fff; font-family: system-ui, sans-serif; text-align: center; padding: 24px; box-sizing: border-box; }
+    a { background: #D4AF37; color: #050B14; padding: 14px 28px; border-radius: 8px; font-weight: 700; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <p>Login concluído. Retornando ao aplicativo...</p>
+  <a href="${escapedLink}">VOLTAR AO APP ILC</a>
+  <script>window.location.href = ${JSON.stringify(deepLink).replace(/</g, '\\u003c')};</script>
+</body>
+</html>`);
   });
 } else {
   console.warn('⚠️  GOOGLE_CLIENT_ID/SECRET não configurados. Login com Google desabilitado.');
