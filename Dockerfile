@@ -3,14 +3,9 @@
 # ------------------------
 # Stage: builder (build do frontend)
 # ------------------------
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /usr/src/app
-
-# Build-time args (non-sensitive). Use EasyPanel/GitHub build-args to set public URLs if desired.
-ARG NEXT_PUBLIC_SUPABASE_URL
-# Tornar disponível durante o build para que o frontend (Vite) injete a variável pública no bundle
-ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
 
 # Instalar dependências necessárias para build (inclui devDependencies)
 # Aceitar peer deps legacy quando necessário
@@ -27,7 +22,7 @@ RUN npm run build
 # ------------------------
 # Stage: runner (imagem final leve)
 # ------------------------
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 
 WORKDIR /usr/src/app
 
@@ -43,11 +38,18 @@ RUN if [ -f package-lock.json ]; then npm ci --omit=dev --legacy-peer-deps; else
 # Copiar artefatos do build e arquivos do servidor
 COPY --from=builder /usr/src/app/dist ./dist
 COPY --from=builder /usr/src/app/server.js ./server.js
+COPY --from=builder /usr/src/app/db.js ./db.js
 COPY --from=builder /usr/src/app/SQL ./SQL
+COPY --from=builder /usr/src/app/scripts ./scripts
+
+# Banco SQLite embutido: monte um VOLUME do EasyPanel em /usr/src/app/data
+# para que o arquivo ilc.db (e os backups diários) sobrevivam a novos deploys.
+ENV DATA_DIR=/usr/src/app/data
 
 # Criar usuário não-root e ajustar permissões
-RUN addgroup -S app && adduser -S app -G app && chown -R app:app /usr/src/app
+RUN addgroup -S app && adduser -S app -G app && mkdir -p /usr/src/app/data && chown -R app:app /usr/src/app
 USER app
+VOLUME ["/usr/src/app/data"]
 
 # Expor porta e definir variável padrão (pode ser sobrescrita em runtime)
 ENV PORT=3000

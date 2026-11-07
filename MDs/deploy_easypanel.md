@@ -1,6 +1,7 @@
 # 🏛️ Guia de Deploy — Login do Cidadão (ILC) no Easypanel (VPS)
 
-> Guia completo para subir o sistema ILC em uma VPS utilizando o **Easypanel** como painel de gerenciamento de containers Docker.
+> Guia completo para subir o sistema ILC em uma VPS utilizando o **Easypanel**.
+> O banco de dados é **SQLite embutido no próprio app**: não existe Supabase nem serviço Postgres. No Easypanel há **um único serviço** (o app ILC) com um **volume** para guardar o arquivo do banco.
 
 ---
 
@@ -8,172 +9,159 @@
 
 | Item | Requisito mínimo |
 |------|-----------------|
-| VPS | 2 vCPU / 2 GB RAM (Ubuntu 22.04 LTS recomendado) |
+| VPS | 1 vCPU / 1 GB RAM (Ubuntu 22.04 LTS recomendado) |
 | Domínio | Um domínio ou subdomínio apontando para o IP da VPS |
 | Easypanel | Instalado e acessível via browser |
-| Conta Supabase | Projeto criado com as tabelas do `SQL/setup_schema.sql` |
 | Conta Google Cloud | Credenciais OAuth 2.0 configuradas (para login com Google) |
 
 ---
 
-## Passo 1 — Preparar o Banco de Dados no Supabase
-
-1. Acesse [supabase.com](https://supabase.com) e entre no seu projeto.
-2. Vá em **SQL Editor** → **New Query**.
-3. Cole o conteúdo completo do arquivo `SQL/setup_schema.sql` deste repositório.
-4. Clique em **Run** para criar todas as tabelas, enums e registros iniciais.
-5. Vá em **Project Settings → Database** e copie a **Connection String (URI)**.
-   - Formato: `postgresql://postgres:[SENHA]@db.[ID].supabase.co:5432/postgres`
-
----
-
-## Passo 2 — Configurar as Credenciais OAuth do Google
+## Passo 1 — Configurar as Credenciais OAuth do Google
 
 1. Acesse o [Google Cloud Console](https://console.cloud.google.com).
 2. Crie um novo projeto (ou use um existente).
 3. Vá em **APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client IDs**.
 4. Tipo de aplicação: **Web application**.
-5. Em **Authorized JavaScript origins**, adicione:
-   - `https://SEU_DOMINIO.com`
-6. Em **Authorized redirect URIs**, adicione:
-   - `https://SEU_DOMINIO.com/api/auth/google/callback`
+5. Em **Authorized JavaScript origins**, adicione `https://SEU_DOMINIO.com`.
+6. Em **Authorized redirect URIs**, adicione `https://SEU_DOMINIO.com/api/auth/google/callback`.
 7. Salve e copie o **Client ID** e o **Client Secret**.
 
 ---
 
-## Passo 3 — Instalar o Easypanel na VPS
-
-Conecte-se via SSH na sua VPS e execute:
+## Passo 2 — Instalar o Easypanel na VPS
 
 ```bash
 curl -sSL https://easypanel.io/install.sh | sh
 ```
 
-Aguarde a instalação. O Easypanel estará disponível em `http://SEU_IP:3000`.
-
-> **Nota**: Após configurar o domínio no Easypanel, o acesso ao painel migrará para `https://SEU_DOMINIO`.
+O Easypanel estará disponível em `http://SEU_IP:3000`.
 
 ---
 
-## Passo 4 — Criar o Projeto no Easypanel
+## Passo 3 — Criar o Projeto e o Serviço do App
 
-1. Acesse o painel do Easypanel no browser.
-2. Clique em **Create Project** e nomeie como `ilc` (ou como preferir).
-
----
-
-## Passo 5 — Adicionar o Serviço da Aplicação
-
-### Opção A: Deploy via GitHub (Recomendado)
-
-1. Dentro do projeto `ilc`, clique em **Create Service → App**.
-2. Selecione **GitHub** como fonte.
-3. Conecte sua conta GitHub e selecione o repositório do ILC.
-4. Configure:
-   - **Branch**: `main`
-   - **Build Command**: *(deixe em branco, o Dockerfile cuida disso)*
-   - **Start Command**: *(deixe em branco)*
-5. Certifique-se de que o **Dockerfile** está na raiz do repositório.
-
-### Opção B: Deploy via Docker Image
-
-Se preferir fazer o build localmente e enviar para o Docker Hub:
-
-```bash
-# Na sua máquina local, dentro da pasta do projeto:
-docker build -t SEU_USUARIO_DOCKERHUB/ilc-portal:latest .
-docker push SEU_USUARIO_DOCKERHUB/ilc-portal:latest
-```
-
-No Easypanel, crie o serviço com **Docker Image** e use `SEU_USUARIO_DOCKERHUB/ilc-portal:latest`.
+1. No Easypanel, clique em **Create Project** (ex.: `ilc`).
+2. Dentro do projeto, **Create Service → App**.
+3. Fonte **GitHub**: selecione o repositório do ILC, branch `main`. O Easypanel usa o `Dockerfile` da raiz (deixe Build/Start Command em branco).
 
 ---
 
-## Passo 6 — Configurar as Variáveis de Ambiente no Easypanel
+## Passo 4 — Volume do Banco de Dados (obrigatório)
 
-Dentro do serviço criado, vá em **Environment Variables** e adicione:
+Sem este passo, **o banco é apagado a cada novo deploy**.
 
-| Variável | Valor | Onde encontrar |
-|----------|-------|----------------|
-| `DATABASE_URL` | `postgresql://postgres:SENHA@db.ID.supabase.co:5432/postgres` | Supabase → Project Settings → Database |
-| `JWT_SECRET` | string aleatória longa (64+ chars) | [Gerar aqui](https://generate-secret.vercel.app/64) |
-| `SESSION_SECRET` | string aleatória diferente do JWT_SECRET (32+ chars) | [Gerar aqui](https://generate-secret.vercel.app/32) |
+1. No serviço do app, abra **Mounts → Add Volume**.
+2. **Name**: `ilc-data` · **Mount Path**: `/usr/src/app/data`
+3. Salve.
+
+> Use o tipo **Volume** (não *Bind*). O volume do Docker herda as permissões da imagem, que roda como usuário `app`.
+
+Dentro desse volume ficam:
+- `ilc.db` (mais `ilc.db-wal` e `ilc.db-shm`): o banco;
+- `backups/ilc-AAAA-MM-DD.db`: backups automáticos diários (os últimos 7 por padrão).
+
+**Mantenha o serviço com 1 réplica.** O SQLite não é compartilhado entre vários containers.
+
+---
+
+## Passo 5 — Variáveis de Ambiente
+
+Em **Environment** do serviço:
+
+| Variável | Valor | Observação |
+|----------|-------|------------|
+| `JWT_SECRET` | string aleatória longa (64+ chars) | obrigatório |
+| `SESSION_SECRET` | outra string aleatória (32+ chars) | obrigatório |
 | `GOOGLE_CLIENT_ID` | `XXX.apps.googleusercontent.com` | Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | `GOCSPX-...` | Google Cloud Console |
-| `GOOGLE_CALLBACK_URL` | `https://SEU_DOMINIO.com/api/auth/google/callback` | Seu domínio |
-| `NODE_ENV` | `production` | — |
-| `PORT` | `3000` | — |
+| `GOOGLE_CALLBACK_URL` | `https://SEU_DOMINIO.com/api/auth/google/callback` | |
+| `WAHA_BASE_URL` / `WAHA_API_KEY` / `WAHA_SESSION` / `WAHA_DEFAULT_CHAT_ID` | dados do WAHA | envio de eventos no grupo do WhatsApp |
+| `SEED_DEMO` | `false` | não cria cidadãos de demonstração no 1º boot |
+| `BACKUP_KEEP` | `7` | opcional: quantos backups diários manter |
+| `NODE_ENV` | `production` | |
+| `PORT` | `3000` | |
+
+`DATA_DIR` já vem definido na imagem (`/usr/src/app/data`). **Não existe mais `DATABASE_URL`.**
 
 ---
 
-## Passo 7 — Configurar o Domínio e HTTPS
+## Passo 6 — Domínio e HTTPS
 
-1. No serviço do Easypanel, vá em **Domains**.
-2. Clique em **Add Domain** e insira seu domínio (ex: `ilc.seudominio.com`).
-3. O Easypanel provisionará automaticamente um certificado **Let's Encrypt** (HTTPS).
-4. Configure o DNS do seu domínio para apontar para o IP da VPS:
-   - Tipo `A` → `SEU_IP_DA_VPS`
+1. No serviço, vá em **Domains → Add Domain** e informe o domínio (ex.: `ilc.seudominio.com`), porta `3000`.
+2. O Easypanel emite o certificado **Let's Encrypt** automaticamente.
+3. No DNS, crie um registro `A` apontando para o IP da VPS.
 
 ---
 
-## Passo 8 — Deploy e Verificação
+## Passo 7 — Deploy e Verificação
 
-1. Clique em **Deploy** no Easypanel.
-2. Acompanhe os logs em tempo real na aba **Logs**.
-3. Quando aparecer `🏛️ Conectado com sucesso ao Supabase/PostgreSQL.` e `🚀 Servidor ILC rodando na porta 3000`, o sistema está funcional.
-4. Acesse `https://SEU_DOMINIO.com` no browser.
+1. Clique em **Deploy** e acompanhe a aba **Logs**.
+2. Quando aparecerem `🏛️ Banco SQLite embutido pronto em /usr/src/app/data/ilc.db` e `📡 Portal ILC rodando na porta ...`, o sistema está no ar.
+3. Acesse `https://SEU_DOMINIO.com`.
 
----
+Em um banco novo, o servidor cria automaticamente o administrador:
 
-## Passo 9 — Credenciais de Acesso Inicial
+| Usuário | Senha padrão |
+|---------|-------------|
+| `comissario_otavio` | `admin123` |
 
-Após o primeiro deploy, o sistema cria automaticamente os usuários administrativos iniciais (se o banco estiver vazio):
-
-| Usuário | Nickname | Senha Padrão |
-|---------|----------|-------------|
-| Administrador Geral | `admin` | `admin123` |
-| Operador | `operador` | `operator123` |
-| Auditor | `auditor` | `auditor123` |
-
-> **⚠️ IMPORTANTE**: Altere essas senhas imediatamente após o primeiro login!
+> **⚠️ IMPORTANTE**: troque essa senha logo após o primeiro login.
 
 ---
 
-## Passo 10 — Atualização da Aplicação
+## Migração única dos dados do Supabase (apenas para quem vinha da versão antiga)
 
-Para atualizar o sistema após mudanças no código:
+Faça uma vez, na troca para esta versão:
 
-**Via GitHub (Opção A)**:
-- Faça `git push` para a branch `main`.
-- O Easypanel detectará a mudança e fará o redeploy automaticamente (se o webhook estiver configurado).
-- Ou clique em **Deploy** manualmente no painel.
+1. Faça o deploy desta versão com o **volume já montado** (Passos 4 e 5). O banco nasce com o admin padrão, que será substituído.
+2. Avise os usuários e evite uso durante a cópia (alguns minutos).
+3. Adicione temporariamente a variável `SUPABASE_DATABASE_URL` com a connection string do Supabase (*Project Settings → Database → Connection string → URI*) e faça **Deploy** para aplicar.
+4. Abra o **Console** do serviço no Easypanel e rode:
+   ```bash
+   node scripts/migrate-from-supabase.js --confirm
+   ```
+   O script:
+   - salva um backup do SQLite atual em `data/backups/pre-migracao-*.db`;
+   - copia todas as tabelas, mantendo IDs, hashes de senha, scores, certificados, eventos e auditoria;
+   - imprime a conferência de linhas por tabela. Todas devem estar com ✅.
+5. Clique em **Restart** no serviço.
+6. Teste: login com senha e com Google, painel do cidadão, painel admin, eventos e envio no grupo.
+7. Mantenha o projeto Supabase intacto por 1–2 semanas como plano de volta. Depois, remova `SUPABASE_DATABASE_URL` e encerre o projeto no Supabase.
 
-**Via Docker Image (Opção B)**:
-```bash
-docker build -t SEU_USUARIO_DOCKERHUB/ilc-portal:latest .
-docker push SEU_USUARIO_DOCKERHUB/ilc-portal:latest
-```
-Depois clique em **Deploy** no Easypanel.
+---
+
+## Backups
+
+- **Automático:** 1 cópia por dia em `/usr/src/app/data/backups/`, dentro do volume.
+- **Download manual (admin):** `GET /api/admin/backup`, com o token de um administrador, baixa uma cópia consistente do banco (`.db`).
+- **Cópia para fora da VPS:** recomendado. Configure o backup de volumes do Easypanel, ou baixe periodicamente pelo endpoint acima.
+- **Restaurar:** pare o serviço, substitua `ilc.db` no volume pelo arquivo de backup (apague `ilc.db-wal` e `ilc.db-shm`) e inicie de novo.
+
+O arquivo `.db` pode ser aberto em qualquer visualizador SQLite, como o [DB Browser for SQLite](https://sqlitebrowser.org/).
+
+---
+
+## Atualização da Aplicação
+
+- Faça `git push` na `main` e clique em **Deploy** (ou use o webhook automático).
+- O volume preserva o banco entre deploys. Novas colunas e tabelas são criadas automaticamente na inicialização.
 
 ---
 
 ## Solução de Problemas Comuns
 
-### ❌ "DATABASE_URL não configurada"
-- Verifique se a variável `DATABASE_URL` está corretamente definida nas variáveis de ambiente do Easypanel.
-- Confirme que a Connection String do Supabase está no formato correto.
+### ❌ "Falha ao preparar o banco SQLite" / `SQLITE_CANTOPEN` / permissão negada
+- Confirme que o mount é do tipo **Volume** em `/usr/src/app/data`.
+- Se usar *Bind mount*, a pasta no host precisa pertencer ao usuário do container. Prefira Volume.
 
-### ❌ "Erro de conexão com o banco de dados"
-- Certifique-se de que o IP da VPS está na allowlist do Supabase em **Project Settings → Database → Connection Pooling**.
-- Tente usar a Connection String do **Connection Pooler** em vez da direta.
+### ❌ Os dados sumiram depois de um deploy
+- O volume não estava montado em `/usr/src/app/data`. Monte-o. Se houver backup em outro lugar, restaure.
 
-### ❌ Build falha no Dockerfile
-- Verifique se todos os arquivos (`server.js`, `src/`, `public/`, `index.html`, `vite.config.js`) estão no repositório.
-- Certifique-se de que `.env` **NÃO** está no `.gitignore` do Easypanel (as variáveis são injetadas pelo painel).
+### ❌ `database is locked`
+- Verifique se o serviço tem **apenas 1 réplica**.
 
 ### ❌ Login com Google não funciona
-- Confirme que o `GOOGLE_CALLBACK_URL` está exatamente igual à URI configurada no Google Cloud Console.
-- Verifique se o domínio foi adicionado como **Authorized JavaScript origin**.
+- `GOOGLE_CALLBACK_URL` deve ser idêntico à URI cadastrada no Google Cloud Console.
 
 ---
 
@@ -181,25 +169,23 @@ Depois clique em **Deploy** no Easypanel.
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                   USUÁRIO                        │
-│              (Browser / App)                     │
+│          USUÁRIO (Browser / APK / iOS)          │
 └──────────────────┬──────────────────────────────┘
-                   │ HTTPS
+                   │ HTTPS (Let's Encrypt via Easypanel)
 ┌──────────────────▼──────────────────────────────┐
-│              VPS (Easypanel)                     │
+│              VPS (Easypanel)                    │
 │  ┌─────────────────────────────────────────┐    │
-│  │  Docker Container: ilc-portal           │    │
+│  │  Serviço único: app ILC (Docker)        │    │
 │  │  ┌─────────────┐  ┌──────────────────┐  │    │
 │  │  │  Express.js │  │  React (dist/)   │  │    │
 │  │  │  :3000 API  │  │  Estáticos       │  │    │
 │  │  └──────┬──────┘  └──────────────────┘  │    │
-│  └─────────┼───────────────────────────────┘    │
-│            │ SSL (Let's Encrypt via Easypanel)   │
-└────────────┼────────────────────────────────────┘
-             │
-┌────────────▼────────────────────────────────────┐
-│              Supabase (Cloud)                    │
-│           PostgreSQL Database                    │
+│  │         │ node:sqlite                    │    │
+│  │  ┌──────▼──────────────────────────┐    │    │
+│  │  │ Volume /usr/src/app/data        │    │    │
+│  │  │  ilc.db  +  backups/            │    │    │
+│  │  └─────────────────────────────────┘    │    │
+│  └─────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────┘
 ```
 

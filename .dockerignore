@@ -8,6 +8,12 @@ node_modules/
 # Build output
 dist/
 
+# Banco SQLite local (nunca vai para a imagem)
+data/
+*.db
+*.db-wal
+*.db-shm
+
 # Git
 .git
 

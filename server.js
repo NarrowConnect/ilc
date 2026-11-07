@@ -1,5 +1,7 @@
 const express = require('express');
-const { Pool } = require('pg');
+const { pool, initSchema, snapshotTo, scheduleBackups, DB_PATH } = require('./db');
+const fs = require('fs');
+const os = require('os');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const dotenv = require('dotenv');
@@ -55,17 +57,13 @@ passport.deserializeUser((user, done) => done(null, user));
 app.use(express.static(path.join(__dirname, 'dist')));
 
 
-// Configurações do Banco de Dados
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  console.error('❌ ERRO CRÍTICO: Variável de ambiente DATABASE_URL não configurada no .env!');
-  process.exit(1);
+// Banco de Dados: SQLite embutido (arquivo em DATA_DIR, ver db.js)
+// Normaliza datas recebidas do cliente para ISO 8601 UTC (como o timestamptz do Postgres fazia)
+function toUtcIso(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const dt = new Date(value);
+  return isNaN(dt.getTime()) ? null : dt.toISOString();
 }
-
-const pool = new Pool({
-  connectionString,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
 
 const JWT_SECRET = process.env.JWT_SECRET || 'chave-secreta-patria-orgulho-ilc';
 
@@ -254,91 +252,14 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
 }
 
 
-pool.connect((err, client, release) => {
-  if (err) {
-    console.error('❌ Erro de conexão com o banco de dados:', err.message);
-    return;
-  }
-  console.log('🏛️ Conectado com sucesso ao Supabase/PostgreSQL.');
-  release();
-  ensureSchemaMigrations().then(initializeDatabase).catch((migrationErr) => {
-    console.error('❌ Falha ao aplicar migrações de schema:', migrationErr.message);
-  });
-});
-
-async function ensureSchemaMigrations() {
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255) UNIQUE');
-  await pool.query('ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS hierarchy_title VARCHAR(150) DEFAULT \'Usuário\'');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS rank_title VARCHAR(100) DEFAULT \'Recruta\'');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS rank_emblem_url TEXT');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_code VARCHAR(10)');
-  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_expires TIMESTAMP WITH TIME ZONE');
-  
-  try {
-    await pool.query('ALTER TABLE roles ALTER COLUMN name TYPE VARCHAR(50)');
-  } catch (e) {
-    // Ignora se for enum ou já alterado
-  }
-
-  await pool.query("INSERT INTO roles (name, description) VALUES ('admin', 'Acesso administrativo total ao sistema') ON CONFLICT DO NOTHING");
-  await pool.query("INSERT INTO roles (name, description) VALUES ('usuario', 'Acesso padrão de usuário/cidadão ao sistema') ON CONFLICT DO NOTHING");
-
-  const usuarioRoleRes = await pool.query("SELECT id FROM roles WHERE name = 'usuario'");
-  if (usuarioRoleRes.rows.length > 0) {
-    const usuarioRoleId = usuarioRoleRes.rows[0].id;
-    await pool.query(`
-      UPDATE users u
-      SET hierarchy_title = CASE 
-        WHEN r.name = 'operator' AND (u.hierarchy_title IS NULL OR u.hierarchy_title = 'Usuário') THEN 'Operador de Campo'
-        WHEN r.name = 'auditor' AND (u.hierarchy_title IS NULL OR u.hierarchy_title = 'Usuário') THEN 'Auditor Cívico'
-        WHEN r.name = 'citizen' AND (u.hierarchy_title IS NULL OR u.hierarchy_title = 'Usuário') THEN 'Cidadão Cívico'
-        WHEN r.name = 'admin' AND (u.hierarchy_title IS NULL OR u.hierarchy_title = 'Usuário') THEN 'Comissário Chefe'
-        ELSE COALESCE(u.hierarchy_title, 'Usuário')
-      END
-      FROM user_roles ur
-      JOIN roles r ON ur.role_id = r.id
-      WHERE u.id = ur.user_id AND r.name IN ('operator', 'auditor', 'citizen', 'admin')
-    `);
-
-    await pool.query(`
-      UPDATE user_roles
-      SET role_id = $1
-      WHERE role_id IN (SELECT id FROM roles WHERE name IN ('operator', 'auditor', 'citizen'))
-    `, [usuarioRoleId]);
-  }
-
-  // Tabela de Eventos da Democracia
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS democracy_events (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      title VARCHAR(255) NOT NULL,
-      description TEXT,
-      location VARCHAR(255),
-      event_date TIMESTAMP WITH TIME ZONE NOT NULL,
-      category VARCHAR(50) NOT NULL DEFAULT 'cívico',
-      status VARCHAR(50) NOT NULL DEFAULT 'planejado',
-      max_participants INT,
-      registration_url TEXT,
-      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Tabela de Participantes em Eventos da Democracia
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS democracy_event_participants (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      event_id UUID NOT NULL REFERENCES democracy_events(id) ON DELETE CASCADE,
-      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      registered_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-      CONSTRAINT unique_event_participant UNIQUE (event_id, user_id)
-    )
-  `);
-
-  console.log('✅ Migrações de schema concluídas (incluindo democracy_events).');
+try {
+  initSchema();
+  console.log(`🏛️ Banco SQLite embutido pronto em ${DB_PATH}`);
+  scheduleBackups();
+  initializeDatabase();
+} catch (dbErr) {
+  console.error('❌ Falha ao preparar o banco SQLite:', dbErr.message);
+  process.exit(1);
 }
 
 // Inicialização e Carga Base de Usuários (Se necessário)
@@ -377,7 +298,8 @@ async function initializeDatabase() {
         { name: 'carlos_antunes', email: 'carlos.antunes@cidadania.br', phone: '+5511933334444', score: 1200, title: 'Cidadão sob Observação', avatar: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=300' }
       ];
 
-      for (const cit of demoUsers) {
+      // SEED_DEMO=false desliga os cidadãos de demonstração (produção)
+      for (const cit of (process.env.SEED_DEMO === 'false' ? [] : demoUsers)) {
         const uRes = await client.query(
           `INSERT INTO users (username, email, celular, password_hash, hierarchy_title, avatar_url)
            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
@@ -813,9 +735,9 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     // Salvar código com expiração de 15 minutos
     await pool.query(
       `UPDATE users 
-       SET reset_code = $1, reset_expires = NOW() + INTERVAL '15 minutes'
+       SET reset_code = $1, reset_expires = $3
        WHERE id = $2`,
-      [resetCode, user.id]
+      [resetCode, user.id, new Date(Date.now() + 15 * 60 * 1000).toISOString()]
     );
 
     // Auditoria da solicitação
@@ -1182,7 +1104,7 @@ app.get('/api/admin/citizens', authenticateToken, requireRole(['admin']), async 
     let paramCounter = 1;
 
     if (search) {
-      query += ` AND (u.username ILIKE $${paramCounter} OR u.email ILIKE $${paramCounter} OR u.celular ILIKE $${paramCounter} OR u.hierarchy_title ILIKE $${paramCounter})`;
+      query += ` AND (unaccent_lower(u.username) LIKE unaccent_lower($${paramCounter}) OR unaccent_lower(u.email) LIKE unaccent_lower($${paramCounter}) OR unaccent_lower(u.celular) LIKE unaccent_lower($${paramCounter}) OR unaccent_lower(u.hierarchy_title) LIKE unaccent_lower($${paramCounter}))`;
       params.push(`%${search}%`);
       paramCounter++;
     }
@@ -1509,7 +1431,7 @@ app.post('/api/admin/events', authenticateToken, requireRole(['admin', 'operator
     const eventInsert = await client.query(
       `INSERT INTO score_events (user_id, event_type_id, points_delta, description, evidence_url, status, occurred_at, approved_by)
        VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, NOW()), $8) RETURNING id`,
-      [user_id, eventTypeId, points_delta, description || '', evidence_url || null, finalStatus, occurred_at || null, approvedBy]
+      [user_id, eventTypeId, points_delta, description || '', evidence_url || null, finalStatus, toUtcIso(occurred_at), approvedBy]
     );
     const eventId = eventInsert.rows[0].id;
 
@@ -1638,7 +1560,7 @@ app.get('/api/admin/audit-logs', authenticateToken, requireRole(['admin', 'audit
 // Listar Tipos de Eventos cadastrados
 app.get('/api/admin/event-types', authenticateToken, async (req, res) => {
   try {
-    const typesRes = await pool.query('SELECT * FROM score_event_types WHERE active = true ORDER BY name ASC');
+    const typesRes = await pool.query('SELECT * FROM score_event_types WHERE active = 1 ORDER BY name ASC');
     res.json(typesRes.rows);
   } catch (err) {
     res.status(500).json({ error: 'Erro ao buscar tipos de eventos: ' + err.message });
@@ -1745,7 +1667,7 @@ app.post('/api/democracy-events', authenticateToken, async (req, res) => {
         title.trim(),
         description || null,
         location || null,
-        event_date,
+        toUtcIso(event_date),
         category || 'cívico',
         status || 'planejado',
         max_participants || null,
@@ -1803,7 +1725,7 @@ app.put('/api/democracy-events/:id', authenticateToken, async (req, res) => {
            registration_url = COALESCE($8, registration_url),
            updated_at = NOW()
        WHERE id = $9`,
-      [title || null, description || null, location || null, event_date || null, category || null, status || null, max_participants || null, registration_url || null, eventId]
+      [title || null, description || null, location || null, toUtcIso(event_date), category || null, status || null, max_participants || null, registration_url || null, eventId]
     );
 
     await client.query(
@@ -2149,6 +2071,26 @@ app.get('/api/civic-overview', authenticateToken, async (req, res) => {
 // Rota de Teste/Fallback da API
 app.get('/api/health', (req, res) => {
   res.json({ status: 'healthy', system: 'ILC Portal' });
+});
+
+// Download de uma cópia consistente do banco SQLite (somente admin)
+app.get('/api/admin/backup', authenticateToken, requireRole(['admin']), async (req, res) => {
+  const fileName = `ilc-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.db`;
+  const tmpPath = path.join(os.tmpdir(), fileName);
+  try {
+    await snapshotTo(tmpPath);
+    await pool.query(
+      `INSERT INTO audit_logs (actor_user_id, entity_name, action, new_data)
+       VALUES ($1, 'database', 'download_backup', $2)`,
+      [req.user.id, JSON.stringify({ file: fileName })]
+    );
+    res.download(tmpPath, fileName, () => {
+      fs.unlink(tmpPath, () => {});
+    });
+  } catch (err) {
+    fs.unlink(tmpPath, () => {});
+    res.status(500).json({ error: 'Erro ao gerar backup do banco: ' + err.message });
+  }
 });
 
 // Servir frontend SPA para qualquer outra rota (HTML5 History API)

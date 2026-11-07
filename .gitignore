@@ -9,6 +9,12 @@ node_modules/
 # Build do Vite
 dist/
 
+# Banco SQLite local e backups
+data/
+*.db
+*.db-wal
+*.db-shm
+
 # Logs
 *.log
 npm-debug.log*

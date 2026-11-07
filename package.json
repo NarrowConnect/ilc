@@ -1,7 +1,7 @@
 {
   "name": "login-do-cidadao-ilc",
   "version": "1.0.0",
-  "description": "Sistema de Dashboard - Índice de Lealdade Cívica (ILC) com Supabase e Express",
+  "description": "Sistema de Dashboard - Índice de Lealdade Cívica (ILC) com Express e banco SQLite embutido",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,6 +10,7 @@
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "build": "vite build",
     "preview": "vite preview",
+    "db:migrate-supabase": "node scripts/migrate-from-supabase.js",
     "build:mobile": "vite build --mode mobile",
     "cap:add:android": "npx cap add android",
     "cap:sync": "npx cap sync",
@@ -44,7 +45,7 @@
     "vite": "^8.1.4"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.16.0"
   },
   "private": true
 }
