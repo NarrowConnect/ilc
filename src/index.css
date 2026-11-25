@@ -2,6 +2,13 @@
    VARIÁVEIS DE DESIGN ESTATAIS (TOKENS)
    ========================================== */
 :root {
+  /* Margens seguras (barra de status, entalhe e barra de navegação do celular).
+     O Capacitor 8 injeta --safe-area-inset-* no Android, onde WebViews antigas devolvem 0 no env(). */
+  --sat: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --sab: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --sal: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+  --sar: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+
   --bg: #050B14;
   --bg-2: #0B1629;
   --panel: #0E1B33;
@@ -90,8 +97,8 @@ body {
   justify-content: center;
   align-items: center;
   padding: 40px 20px;
-  padding-top: max(40px, env(safe-area-inset-top));
-  padding-bottom: max(40px, env(safe-area-inset-bottom));
+  padding-top: max(40px, var(--sat));
+  padding-bottom: max(40px, var(--sab));
   background: radial-gradient(circle at 50% 30%, #12223f 0%, var(--bg) 70%);
 }
 
@@ -418,7 +425,7 @@ textarea:focus {
   background: var(--panel);
   border-bottom: 2px solid var(--border);
   padding: 16px 24px;
-  padding-top: max(16px, env(safe-area-inset-top));
+  padding-top: max(16px, var(--sat));
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1238,8 +1245,8 @@ textarea:focus {
   justify-content: center;
   align-items: center;
   padding: 20px 16px;
-  padding-top: max(20px, env(safe-area-inset-top));
-  padding-bottom: max(20px, env(safe-area-inset-bottom));
+  padding-top: max(20px, var(--sat));
+  padding-bottom: max(20px, var(--sab));
 }
 
 .modal-overlay.active {
@@ -1379,7 +1386,7 @@ button, input, select, textarea, a, .nav-tab, .sim-btn, .auth-tab {
     gap: 16px;
     align-items: flex-start;
     padding: 16px;
-    padding-top: max(16px, env(safe-area-inset-top));
+    padding-top: max(16px, var(--sat));
   }
   .header-user-info {
     width: 100%;
@@ -1454,7 +1461,7 @@ button, input, select, textarea, a, .nav-tab, .sim-btn, .auth-tab {
   .toast-container {
     left: 12px;
     right: 12px;
-    bottom: calc(12px + env(safe-area-inset-bottom));
+    bottom: calc(12px + var(--sab));
     min-width: auto;
     max-width: 100%;
   }
@@ -2509,6 +2516,8 @@ button, input, select, textarea, a, .nav-tab, .sim-btn, .auth-tab {
    - login em 100dvh, compacto e sem scroll
    ========================================================== */
 html, body { max-width: 100%; overflow-x: hidden; }
+/* clip corta a sobra lateral sem virar área de rolagem, senão o menu grudado (sticky) não gruda */
+@supports (overflow: clip) { html, body { overflow-x: clip; } }
 img, svg, video, canvas { max-width: 100%; }
 .main-content, .bento-card, .tab-pane, .stat-card { min-width: 0; }
 .main-content * { overflow-wrap: anywhere; }
@@ -2539,7 +2548,7 @@ img, svg, video, canvas { max-width: 100%; }
     align-items: stretch;
     gap: 10px;
     padding: 10px 14px;
-    padding-top: max(10px, env(safe-area-inset-top));
+    padding-top: max(10px, var(--sat));
   }
   .header-identity { gap: 10px; }
   .header-logo { width: 36px; height: 36px; }
@@ -2696,8 +2705,8 @@ img, svg, video, canvas { max-width: 100%; }
     height: 100dvh;
     min-height: 0;
     padding: 10px;
-    padding-top: max(10px, env(safe-area-inset-top));
-    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    padding-top: max(10px, var(--sat));
+    padding-bottom: max(10px, var(--sab));
     overflow: hidden;
     align-items: center;
   }
@@ -3107,4 +3116,48 @@ label .ilc-icon, .audit-action-badge .ilc-icon, .audit-entity-badge .ilc-icon, .
   .feed-composer-photo { flex: 1 1 0; justify-content: center; }
   .feed-composer-count { display: none; }
   .feed-composer-send { flex: 1 1 100%; }
+}
+
+
+/* ==========================================
+   MARGENS SEGURAS NO CELULAR (topo e barra de baixo)
+   ========================================== */
+.app-container {
+  padding-left: var(--sal);
+  padding-right: var(--sar);
+}
+/* Última parte da tela não fica atrás da barra de navegação do Android/iPhone */
+.main-content {
+  padding-bottom: calc(24px + var(--sab));
+}
+/* Faixa fixa atrás da barra de status: o conteúdo rolado não aparece por baixo do relógio */
+.app-container.active::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--sat);
+  background: var(--panel);
+  z-index: 950;
+  pointer-events: none;
+}
+.modal-overlay {
+  padding-left: max(16px, var(--sal));
+  padding-right: max(16px, var(--sar));
+}
+.modal-card {
+  max-height: calc(100dvh - 40px - var(--sat) - var(--sab));
+  overflow-y: auto;
+}
+@media (max-width: 768px) {
+  .main-content { padding-bottom: calc(20px + var(--sab)); }
+  /* Menu grudado logo abaixo da barra de status, não por baixo dela */
+  .main-nav { top: var(--sat); }
+  /* Menu aberto cabe na tela e rola se tiver muitas abas (admin) */
+  .main-nav.open .nav-group.active {
+    max-height: calc(100dvh - var(--sat) - var(--sab) - 64px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
 }
