@@ -68,6 +68,98 @@ function toUtcIso(value) {
 const JWT_SECRET = process.env.JWT_SECRET || 'chave-secreta-patria-orgulho-ilc';
 
 // ==========================================
+// DONO DO SISTEMA E GESTÃO DE ADMINISTRADORES
+// ==========================================
+// OWNER_EMAILS (ou OWNER_EMAIL): e-mails Google separados por vírgula.
+// Quem entrar com o Google usando um desses e-mails vira administrador
+// automaticamente e não pode ser rebaixado pelo app. O e-mail é conferido no
+// login Google (verificado pelo próprio Google), nunca no login por senha.
+const OWNER_EMAILS = (process.env.OWNER_EMAILS || process.env.OWNER_EMAIL || '')
+  .split(',')
+  .map(e => e.trim().toLowerCase())
+  .filter(Boolean);
+
+function isOwnerEmail(email) {
+  return !!email && OWNER_EMAILS.includes(String(email).trim().toLowerCase());
+}
+
+// Dono = conta Google cujo e-mail está em OWNER_EMAILS
+function isOwnerAccount(user) {
+  return !!(user && user.google_id && isOwnerEmail(user.email));
+}
+
+async function getRoleIdByName(client, name) {
+  const res = await client.query('SELECT id FROM roles WHERE name = $1', [name]);
+  if (res.rows.length > 0) return res.rows[0].id;
+  await client.query('INSERT INTO roles (name) VALUES ($1)', [name]);
+  return (await client.query('SELECT id FROM roles WHERE name = $1', [name])).rows[0].id;
+}
+
+async function getUserRoleName(client, userId) {
+  const res = await client.query(
+    `SELECT r.name FROM user_roles ur JOIN roles r ON ur.role_id = r.id
+     WHERE ur.user_id = $1
+     ORDER BY CASE r.name WHEN 'admin' THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [userId]
+  );
+  return res.rows.length > 0 ? res.rows[0].name : 'usuario';
+}
+
+async function setUserRoleName(client, userId, roleName) {
+  const roleId = await getRoleIdByName(client, roleName);
+  await client.query('DELETE FROM user_roles WHERE user_id = $1', [userId]);
+  await client.query('INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)', [userId, roleId]);
+}
+
+async function countAdmins(client) {
+  const res = await client.query(
+    `SELECT COUNT(DISTINCT ur.user_id) AS total
+     FROM user_roles ur JOIN roles r ON ur.role_id = r.id
+     JOIN users u ON u.id = ur.user_id
+     WHERE r.name = 'admin' AND u.status <> 'blocked'`
+  );
+  return parseInt(res.rows[0].total, 10) || 0;
+}
+
+// Promove o dono a admin no login Google. `verifiedEmail` vem do Google.
+async function ensureOwnerAdmin(client, userId, verifiedEmail) {
+  if (!isOwnerEmail(verifiedEmail)) return false;
+  const current = await getUserRoleName(client, userId);
+  if (current === 'admin') return true;
+  await setUserRoleName(client, userId, 'admin');
+  await client.query(
+    `INSERT INTO audit_logs (actor_user_id, entity_name, entity_id, action, new_data)
+     VALUES ($1, 'users', $2, 'owner_bootstrap_admin', $3)`,
+    [userId, userId, JSON.stringify({ role: 'admin', reason: 'OWNER_EMAILS' })]
+  );
+  console.log(`👑 Dono do sistema promovido a administrador (usuário ${userId}).`);
+  return true;
+}
+
+// Valida uma troca de papel feita por um admin. Retorna null se pode, ou { status, error }.
+// Usa 400/409 (não 403) porque o app desloga em qualquer 403.
+async function validateRoleChange(client, actorId, target, newRole) {
+  if (!['admin', 'usuario'].includes(newRole)) {
+    return { status: 400, error: 'Papel inválido. Use "admin" ou "usuario".' };
+  }
+  const currentRole = await getUserRoleName(client, target.id);
+  if (currentRole === newRole) return null;
+  if (newRole !== 'admin') {
+    if (String(target.id) === String(actorId)) {
+      return { status: 400, error: 'Você não pode remover o seu próprio acesso de administrador.' };
+    }
+    if (isOwnerAccount(target)) {
+      return { status: 409, error: 'Este administrador é o dono do sistema (OWNER_EMAILS) e não pode ser rebaixado pelo app.' };
+    }
+    if (await countAdmins(client) <= 1) {
+      return { status: 409, error: 'Não é possível remover o último administrador ativo.' };
+    }
+  }
+  return null;
+}
+
+// ==========================================
 // CONFIGURAÇÃO GOOGLE OAUTH (PASSPORT)
 // ==========================================
 
@@ -88,6 +180,7 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
       return done(null, {
         google_id: profile.id,
         email: profile.emails && profile.emails[0] ? profile.emails[0].value : null,
+        email_verified: !!(profile.emails && profile.emails[0] && profile.emails[0].verified !== false),
         name: profile.displayName,
         avatar_url
       });
@@ -134,7 +227,7 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
 
   // Callback do Google após autenticação
   async function handleGoogleCallback(req, res) {
-    const { google_id, email, avatar_url } = req.user;
+    const { google_id, email, email_verified, avatar_url } = req.user;
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -153,6 +246,11 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         // Conta existente — atualizar foto se veio do Google
         const user = userRes.rows[0];
         let currentAvatar = user.avatar_url;
+
+        // Dono do sistema (OWNER_EMAILS) vira admin automaticamente
+        if (email_verified && await ensureOwnerAdmin(client, user.id, email)) {
+          user.role = 'admin';
+        }
 
         if (avatar_url && (!currentAvatar || currentAvatar.includes('googleusercontent.com'))) {
           await client.query('UPDATE users SET avatar_url = $1 WHERE id = $2', [avatar_url, user.id]);
@@ -186,7 +284,7 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
       // Nova conta — redirecionar para completar cadastro com nickname
       await client.query('COMMIT');
       const safeAvatar = getSafeAvatarForToken(avatar_url);
-      const tempToken = jwt.sign({ google_id, email, avatar_url: safeAvatar, needs_nickname: true }, JWT_SECRET, { expiresIn: '15m' });
+      const tempToken = jwt.sign({ google_id, email, email_verified: !!email_verified, avatar_url: safeAvatar, needs_nickname: true }, JWT_SECRET, { expiresIn: '15m' });
       return res.redirect(getRedirectTarget(req, `google_new=1&google_temp=${tempToken}`));
     } catch (err) {
       await client.query('ROLLBACK');
@@ -354,10 +452,24 @@ function authenticateToken(req, res, next) {
 
   if (!token) return res.status(401).json({ error: 'Acesso negado. Token não fornecido.' });
 
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
     if (err) return res.status(403).json({ error: 'Token inválido ou expirado.' });
-    req.user = decoded;
-    next();
+    if (!decoded || !decoded.id) return res.status(401).json({ error: 'Token inválido.' });
+    try {
+      // O papel e o status valem o que está no banco agora, não o que estava no token.
+      // Assim, promover/rebaixar ou bloquear alguém vale na hora.
+      const userRes = await pool.query('SELECT id, status FROM users WHERE id = $1', [decoded.id]);
+      if (userRes.rows.length === 0) return res.status(401).json({ error: 'Conta não encontrada. Faça login novamente.' });
+      if (userRes.rows[0].status === 'blocked') {
+        return res.status(403).json({ error: 'Seu privilégio de acesso foi SUSPENSO pelo Estado cívico.' });
+      }
+      const dbRole = await getUserRoleName(pool, decoded.id);
+      req.user = { ...decoded, role: dbRole === 'admin' ? 'admin' : 'usuario' };
+      next();
+    } catch (e) {
+      console.error('❌ Falha ao validar sessão:', e.message);
+      res.status(500).json({ error: 'Falha ao validar sessão.' });
+    }
   });
 }
 
@@ -538,25 +650,25 @@ app.post('/api/auth/register', async (req, res) => {
 
 // Completar Cadastro via Google (aceita temp_token do callback OAuth ou dados diretos)
 app.post('/api/auth/google-signup', async (req, res) => {
-  let google_id, email, avatar_url;
+  let google_id, email, email_verified, avatar_url;
   const { temp_token, username } = req.body;
 
-  if (temp_token) {
-    try {
-      const decoded = jwt.verify(temp_token, JWT_SECRET);
-      if (!decoded.needs_nickname) {
-        return res.status(400).json({ error: 'Token temporário inválido.' });
-      }
-      google_id = decoded.google_id;
-      email = decoded.email;
-      avatar_url = decoded.avatar_url;
-    } catch (err) {
-      return res.status(401).json({ error: 'Token temporário expirado ou inválido. Inicie o processo novamente.' });
+  // Só aceita dados vindos do Google pelo token temporário assinado pelo servidor.
+  // (Antes aceitava google_id solto no corpo, o que permitia entrar na conta de outra pessoa.)
+  if (!temp_token) {
+    return res.status(400).json({ error: 'Token temporário ausente. Entre com o Google novamente.' });
+  }
+  try {
+    const decoded = jwt.verify(temp_token, JWT_SECRET);
+    if (!decoded.needs_nickname) {
+      return res.status(400).json({ error: 'Token temporário inválido.' });
     }
-  } else {
-    google_id = req.body.google_id;
-    email = req.body.email;
-    avatar_url = req.body.avatar_url;
+    google_id = decoded.google_id;
+    email = decoded.email;
+    email_verified = !!decoded.email_verified;
+    avatar_url = decoded.avatar_url;
+  } catch (err) {
+    return res.status(400).json({ error: 'Token temporário expirado ou inválido. Inicie o processo novamente.' });
   }
 
   if (!google_id) {
@@ -626,14 +738,16 @@ app.post('/api/auth/google-signup', async (req, res) => {
       [userId, userId, JSON.stringify({ username, email, google_id, avatar_url, hierarchy_title: defaultTitle })]
     );
 
+    const newRole = (email_verified && await ensureOwnerAdmin(client, userId, email)) ? 'admin' : 'usuario';
+
     await client.query('COMMIT');
 
     const token = jwt.sign(
-      { id: userId, username, role: 'usuario', hierarchy_title: defaultTitle },
+      { id: userId, username, role: newRole, hierarchy_title: defaultTitle },
       JWT_SECRET,
       { expiresIn: '8h' }
     );
-    res.json({ token, role: 'usuario', username, hierarchy_title: defaultTitle, avatar_url: avatar_url || null });
+    res.json({ token, role: newRole, username, hierarchy_title: defaultTitle, avatar_url: avatar_url || null });
   } catch (err) {
     await client.query('ROLLBACK');
     res.status(500).json({ error: 'Falha ao cadastrar via Google: ' + err.message });
@@ -1286,9 +1400,26 @@ app.put('/api/admin/citizens/:id', authenticateToken, requireRole(['admin']), as
   try {
     await client.query('BEGIN');
 
-    const userCheck = await client.query('SELECT id, username, status FROM users WHERE id = $1', [citizenId]);
+    const userCheck = await client.query('SELECT id, username, status, email, google_id FROM users WHERE id = $1', [citizenId]);
     if (userCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+
+    if (role && ['admin', 'usuario'].includes(role)) {
+      const problem = await validateRoleChange(client, req.user.id, userCheck.rows[0], role);
+      if (problem) {
+        await client.query('ROLLBACK');
+        return res.status(problem.status).json({ error: problem.error });
+      }
+    }
+    if (status === 'blocked' && String(citizenId) === String(req.user.id)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Você não pode bloquear a sua própria conta.' });
+    }
+    if (status === 'blocked' && isOwnerAccount(userCheck.rows[0])) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'O dono do sistema não pode ser bloqueado pelo app.' });
     }
 
     if (username && username.trim() !== '') {
@@ -1367,11 +1498,17 @@ app.post('/api/admin/citizens/:id/status', authenticateToken, requireRole(['admi
   try {
     await client.query('BEGIN');
 
-    const oldRes = await client.query('SELECT status FROM users WHERE id = $1', [citizenId]);
+    const oldRes = await client.query('SELECT status, email, google_id FROM users WHERE id = $1', [citizenId]);
     if (oldRes.rows.length === 0) {
       return res.status(404).json({ error: 'Usuário não encontrado.' });
     }
     const oldStatus = oldRes.rows[0].status;
+    if (status === 'blocked' && String(citizenId) === String(req.user.id)) {
+      return res.status(400).json({ error: 'Você não pode bloquear a sua própria conta.' });
+    }
+    if (status === 'blocked' && isOwnerAccount(oldRes.rows[0])) {
+      return res.status(409).json({ error: 'O dono do sistema não pode ser bloqueado pelo app.' });
+    }
 
     await client.query('UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2', [status, citizenId]);
 
@@ -1391,6 +1528,115 @@ app.post('/api/admin/citizens/:id/status', authenticateToken, requireRole(['admi
   } catch (err) {
     await client.query('ROLLBACK');
     res.status(500).json({ error: 'Erro ao alterar status: ' + err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ------------------------------------------
+// GESTÃO DE ADMINISTRADORES (somente admin)
+// ------------------------------------------
+
+// Lista os administradores atuais
+app.get('/api/admin/admins', authenticateToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT u.id, u.username, u.email, u.google_id, u.avatar_url, u.hierarchy_title, u.status, u.created_at
+       FROM users u
+       JOIN user_roles ur ON u.id = ur.user_id
+       JOIN roles r ON ur.role_id = r.id
+       WHERE r.name = 'admin'
+       ORDER BY u.username`
+    );
+    const admins = result.rows.map(u => ({
+      id: u.id,
+      username: u.username,
+      email: u.email,
+      avatar_url: u.avatar_url,
+      hierarchy_title: u.hierarchy_title,
+      status: u.status,
+      created_at: u.created_at,
+      is_owner: isOwnerAccount(u),
+      is_self: String(u.id) === String(req.user.id)
+    }));
+    res.json({ admins, owner_configured: OWNER_EMAILS.length > 0 });
+  } catch (err) {
+    res.status(500).json({ error: 'Falha ao listar administradores: ' + err.message });
+  }
+});
+
+// Procura usuários comuns para promover (por nickname, e-mail ou celular)
+app.get('/api/admin/admins/candidates', authenticateToken, requireRole(['admin']), async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json({ users: [] });
+  try {
+    const like = `%${q}%`;
+    const result = await pool.query(
+      `SELECT u.id, u.username, u.email, u.avatar_url, u.hierarchy_title, u.status
+       FROM users u
+       WHERE (u.username LIKE $1 OR u.email LIKE $1 OR u.celular LIKE $1)
+         AND u.id NOT IN (
+           SELECT ur.user_id FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE r.name = 'admin'
+         )
+       ORDER BY u.username
+       LIMIT 10`,
+      [like]
+    );
+    res.json({ users: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Falha ao buscar usuários: ' + err.message });
+  }
+});
+
+// Promove (role = 'admin') ou rebaixa (role = 'usuario') um usuário
+app.post('/api/admin/users/:id/role', authenticateToken, requireRole(['admin']), async (req, res) => {
+  const targetId = req.params.id;
+  const { role } = req.body || {};
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const targetRes = await client.query('SELECT id, username, email, google_id, status FROM users WHERE id = $1', [targetId]);
+    if (targetRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+    const target = targetRes.rows[0];
+    if (role === 'admin' && target.status === 'blocked') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Desbloqueie o usuário antes de torná-lo administrador.' });
+    }
+    const problem = await validateRoleChange(client, req.user.id, target, role);
+    if (problem) {
+      await client.query('ROLLBACK');
+      return res.status(problem.status).json({ error: problem.error });
+    }
+    const oldRole = await getUserRoleName(client, target.id);
+    if (oldRole === role) {
+      await client.query('ROLLBACK');
+      return res.json({ success: true, message: role === 'admin' ? `@${target.username} já é administrador.` : `@${target.username} já é usuário comum.` });
+    }
+    await setUserRoleName(client, target.id, role);
+    await client.query(
+      `INSERT INTO audit_logs (actor_user_id, entity_name, entity_id, action, old_data, new_data)
+       VALUES ($1, 'users', $2, $3, $4, $5)`,
+      [
+        req.user.id,
+        target.id,
+        role === 'admin' ? 'promote_admin' : 'demote_admin',
+        JSON.stringify({ role: oldRole }),
+        JSON.stringify({ role })
+      ]
+    );
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      message: role === 'admin'
+        ? `@${target.username} agora é administrador.`
+        : `@${target.username} voltou a ser usuário comum.`
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: 'Falha ao alterar papel: ' + err.message });
   } finally {
     client.release();
   }
@@ -2135,4 +2381,9 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer({ maxHeaderSize: 65536 }, app);
 server.listen(PORT, () => {
   console.log(`📡 Portal ILC rodando na porta http://localhost:${PORT}`);
+  if (OWNER_EMAILS.length === 0) {
+    console.log('⚠️  OWNER_EMAILS não definido: defina com o seu e-mail Google para virar administrador ao entrar.');
+  } else {
+    console.log(`👑 Donos do sistema configurados: ${OWNER_EMAILS.length}`);
+  }
 });

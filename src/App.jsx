@@ -203,6 +203,15 @@ function App() {
   const [certificatesList, setCertificatesList] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
 
+  // Gestão de administradores
+  const [adminList, setAdminList] = useState([]);
+  const [adminOwnerConfigured, setAdminOwnerConfigured] = useState(true);
+  const [adminListLoading, setAdminListLoading] = useState(false);
+  const [adminCandidateQuery, setAdminCandidateQuery] = useState('');
+  const [adminCandidates, setAdminCandidates] = useState([]);
+  const [adminRoleBusyId, setAdminRoleBusyId] = useState(null);
+  const [adminRoleConfirm, setAdminRoleConfirm] = useState(null); // { user, role }
+
   // Logs de auditoria do usuário comum
   const [citizenAuditLogs, setCitizenAuditLogs] = useState([]);
 
@@ -361,6 +370,9 @@ function App() {
       'DELETE_DEMOCRACY_EVENT': { label: '🗑️ Evento Excluído', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
       'REGISTER_DEMOCRACY_EVENT': { label: '🙋 Inscrição Confirmada', color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
       'CANCEL_DEMOCRACY_EVENT': { label: '🚫 Inscrição Cancelada', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
+      'PROMOTE_ADMIN': { label: '⭐ Promovido a Admin', color: 'rgba(176, 138, 71, 0.25)', border: '#B08A47', text: '#FFD700' },
+      'DEMOTE_ADMIN': { label: '⬇️ Admin Rebaixado', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
+      'OWNER_BOOTSTRAP_ADMIN': { label: '👑 Dono Virou Admin', color: 'rgba(176, 138, 71, 0.25)', border: '#B08A47', text: '#FFD700' },
     };
     return map[norm] || { label: act.replace(/_/g, ' ').toUpperCase(), color: 'rgba(78, 110, 142, 0.2)', border: '#4E6E8E', text: '#B9B19A' };
   };
@@ -525,6 +537,8 @@ function App() {
       fetchAdminMetrics();
     } else if (activeTab === 'adm-audit') {
       fetchAdminAuditLogs();
+    } else if (activeTab === 'adm-admins') {
+      fetchAdminList();
     } else if (activeTab === 'adm-democracy-events') {
       fetchDemocracyEvents();
     } else if (activeTab === 'civic-vision') {
@@ -539,6 +553,44 @@ function App() {
       fetchCertificates();
     }
   }, [token, userRole]);
+
+  // Busca de usuários para promover (com pequeno atraso enquanto digita)
+  useEffect(() => {
+    if (!token || userRole !== 'admin' || activeTab !== 'adm-admins') return;
+    const q = adminCandidateQuery.trim();
+    if (q.length < 2) { setAdminCandidates([]); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetchWithTimeout(`${API_BASE}/admin/admins/candidates?q=${encodeURIComponent(q)}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await parseApiResponse(res);
+        if (res.ok) setAdminCandidates(data.users || []);
+      } catch (_) { }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [adminCandidateQuery, activeTab, token, userRole]);
+
+  // O papel vale o que está no servidor: se alguém foi promovido ou rebaixado, atualiza o app
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetchWithTimeout(`${API_BASE}/citizen/me`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const serverRole = data && data.profile && data.profile.role === 'admin' ? 'admin' : 'usuario';
+        if (!cancelled && serverRole !== userRole) {
+          setUserRole(serverRole);
+          safeStorage.setItem('ilc_role', serverRole);
+        }
+      } catch (_) { }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
 
   // Sincronizar detalhe do usuário
   useEffect(() => {
@@ -1123,6 +1175,48 @@ function App() {
       fetchAdminCitizens();
     } catch (err) {
       showToast('Falha ao Criar Usuário', err.message || 'Erro ao registrar cidadão.', 'warning');
+    }
+  };
+
+  const fetchAdminList = async () => {
+    setAdminListLoading(true);
+    try {
+      const res = await fetchWithTimeout(`${API_BASE}/admin/admins`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await parseApiResponse(res);
+      if (!res.ok) throw new Error(data.error);
+      setAdminList(data.admins || []);
+      setAdminOwnerConfigured(!!data.owner_configured);
+    } catch (err) {
+      showToast('Falha ao Carregar', err.message || 'Não foi possível listar os administradores.', 'warning');
+    } finally {
+      setAdminListLoading(false);
+    }
+  };
+
+  const changeAdminRole = async (user, role) => {
+    setAdminRoleBusyId(user.id);
+    try {
+      const res = await fetchWithTimeout(`${API_BASE}/admin/users/${user.id}/role`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ role })
+      });
+      const data = await parseApiResponse(res);
+      if (!res.ok) throw new Error(data.error);
+      showToast(role === 'admin' ? 'Administrador Nomeado' : 'Acesso Removido', data.message, 'success');
+      setAdminRoleConfirm(null);
+      setAdminCandidateQuery('');
+      setAdminCandidates([]);
+      fetchAdminList();
+    } catch (err) {
+      showToast('Não Foi Possível Alterar', err.message || 'Falha ao alterar o papel.', 'warning');
+    } finally {
+      setAdminRoleBusyId(null);
     }
   };
 
@@ -1774,6 +1868,7 @@ function App() {
             <button className={`nav-tab ${activeTab === 'adm-citizens' || detailCitizenId !== null ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('adm-citizens'); }}>GESTÃO DE USUÁRIOS</button>
             <button className={`nav-tab ${activeTab === 'adm-approvals' ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('adm-approvals'); }}>APROVAÇÕES PENDENTES</button>
             <button className={`nav-tab ${activeTab === 'adm-audit' ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('adm-audit'); }}>LOGS DE AUDITORIA</button>
+            <button className={`nav-tab ${activeTab === 'adm-admins' ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('adm-admins'); }}>ADMINISTRADORES</button>
             <button className={`nav-tab ${activeTab === 'cit-dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('cit-dashboard')}>MINHA CARTEIRA</button>
             <button className={`nav-tab ${activeTab === 'adm-democracy-events' ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('adm-democracy-events'); fetchDemocracyEvents(); }}>EVENTOS DA DEMOCRACIA</button>
             <button className={`nav-tab ${activeTab === 'civic-vision' ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('civic-vision'); }}>VISÃO CÍVICA</button>
@@ -2678,6 +2773,117 @@ function App() {
                 </tbody>
               </table>
             </div>
+          </section>
+        )}
+
+        {/* ========================================== */}
+        {/* GESTÃO DE ADMINISTRADORES */}
+        {/* ========================================== */}
+        {activeTab === 'adm-admins' && userRole === 'admin' && (
+          <section className="tab-pane active admins-pane">
+            <div className="section-heading">
+              <h2 className="section-title">ADMINISTRADORES</h2>
+              <p className="section-subtitle">Nomeie ou remova administradores sem mexer no banco de dados. Toda mudança fica registrada na auditoria.</p>
+            </div>
+
+            {!adminOwnerConfigured && (
+              <div className="admins-notice">
+                <strong>Dono do sistema não configurado.</strong> Defina a variável <span className="admins-code">OWNER_EMAILS</span> no servidor com o seu e-mail Google para garantir que você nunca perca o acesso.
+              </div>
+            )}
+
+            <div className="admins-block">
+              <h3 className="admins-block-title">Nomear novo administrador</h3>
+              <input
+                type="search"
+                className="admins-search"
+                placeholder="Buscar por nickname, e-mail ou celular"
+                value={adminCandidateQuery}
+                onChange={e => setAdminCandidateQuery(e.target.value)}
+                autoComplete="off"
+              />
+              {adminCandidateQuery.trim().length >= 2 && (
+                <ul className="admins-list">
+                  {adminCandidates.length === 0 ? (
+                    <li className="admins-empty">Nenhum usuário comum encontrado.</li>
+                  ) : adminCandidates.map(u => (
+                    <li key={u.id} className="admins-item">
+                      {u.avatar_url
+                        ? <img src={u.avatar_url} alt="" className="admins-avatar" />
+                        : <div className="admins-avatar admins-avatar-ph">{(u.username || '?').charAt(0).toUpperCase()}</div>}
+                      <div className="admins-info">
+                        <span className="admins-name">@{u.username}</span>
+                        <span className="admins-meta">{u.email || 'Sem e-mail'}{u.status === 'blocked' ? ' · bloqueado' : ''}</span>
+                      </div>
+                      <button
+                        className="admins-btn promote"
+                        disabled={adminRoleBusyId === u.id || u.status === 'blocked'}
+                        onClick={() => setAdminRoleConfirm({ user: u, role: 'admin' })}
+                      >
+                        Tornar admin
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="admins-block">
+              <h3 className="admins-block-title">Administradores atuais {adminList.length > 0 && <span className="admins-count">{adminList.length}</span>}</h3>
+              {adminListLoading && adminList.length === 0 ? (
+                <p className="admins-empty">Carregando...</p>
+              ) : (
+                <ul className="admins-list">
+                  {adminList.map(a => (
+                    <li key={a.id} className="admins-item">
+                      {a.avatar_url
+                        ? <img src={a.avatar_url} alt="" className="admins-avatar" />
+                        : <div className="admins-avatar admins-avatar-ph">{(a.username || '?').charAt(0).toUpperCase()}</div>}
+                      <div className="admins-info">
+                        <span className="admins-name">
+                          @{a.username}
+                          {a.is_owner && <span className="admins-tag owner">Dono</span>}
+                          {a.is_self && <span className="admins-tag">Você</span>}
+                        </span>
+                        <span className="admins-meta">{a.email || 'Sem e-mail'}</span>
+                      </div>
+                      {!a.is_owner && !a.is_self && (
+                        <button
+                          className="admins-btn demote"
+                          disabled={adminRoleBusyId === a.id || adminList.length <= 1}
+                          onClick={() => setAdminRoleConfirm({ user: a, role: 'usuario' })}
+                        >
+                          Remover
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {adminRoleConfirm && (
+              <div className="modal-overlay active" onClick={() => adminRoleBusyId === null && setAdminRoleConfirm(null)}>
+                <div className="modal-card admins-confirm" onClick={e => e.stopPropagation()}>
+                  <h3 className="modal-title">{adminRoleConfirm.role === 'admin' ? 'Tornar administrador?' : 'Remover administrador?'}</h3>
+                  <p className="modal-desc">
+                    {adminRoleConfirm.role === 'admin'
+                      ? <>@{adminRoleConfirm.user.username} terá acesso total ao painel, incluindo gerenciar usuários e outros administradores.</>
+                      : <>@{adminRoleConfirm.user.username} volta a ser usuário comum e perde o acesso ao painel na hora.</>}
+                  </p>
+                  <div className="admins-confirm-actions">
+                    <button className="admins-btn" disabled={adminRoleBusyId !== null} onClick={() => setAdminRoleConfirm(null)}>Cancelar</button>
+                    <button
+                      className={`admins-btn ${adminRoleConfirm.role === 'admin' ? 'promote' : 'demote'}`}
+                      disabled={adminRoleBusyId !== null}
+                      onClick={() => changeAdminRole(adminRoleConfirm.user, adminRoleConfirm.role)}
+                    >
+                      {adminRoleBusyId !== null ? 'Salvando...' : 'Confirmar'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         )}
 
