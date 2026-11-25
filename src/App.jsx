@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
+import CountUp from './components/CountUp.jsx';
 import { Browser } from '@capacitor/browser';
 import ScoreChart from './components/ScoreChart';
 import CertificatesGrid from './components/CertificatesGrid';
@@ -129,6 +130,19 @@ function App() {
   const [username, setUsername] = useState(safeStorage.getItem('ilc_username') || null);
   const [userHierarchyTitle, setUserHierarchyTitle] = useState(safeStorage.getItem('ilc_hierarchy_title') || null);
   const [userAvatarUrl, setUserAvatarUrl] = useState(safeStorage.getItem('ilc_avatar_url') || null);
+  const [navOpen, setNavOpen] = useState(false);
+
+  // Tabelas viram cartões no celular: cada célula recebe o nome da coluna (data-label)
+  useEffect(() => {
+    document.querySelectorAll('.state-table').forEach(table => {
+      const heads = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
+      table.querySelectorAll('tbody tr').forEach(tr => {
+        Array.from(tr.children).forEach((td, i) => {
+          if (!td.hasAttribute('colspan') && heads[i] && td.dataset.label !== heads[i]) td.dataset.label = heads[i];
+        });
+      });
+    });
+  });
 
   // Controle de Abas
   const [activeTab, setActiveTab] = useState('');
@@ -1533,7 +1547,7 @@ function App() {
           <div className="auth-tabs">
             <button className={`auth-tab ${authTab === 'login' ? 'active' : ''}`} onClick={() => setAuthTab('login')}>ENTRAR</button>
             <button className={`auth-tab ${authTab === 'register' ? 'active' : ''}`} onClick={() => setAuthTab('register')}>REGISTRAR</button>
-            <button className={`auth-tab ${authTab === 'forgot' ? 'active' : ''}`} onClick={() => { setAuthTab('forgot'); setForgotStep(1); }}>RECUPERAR SENHA</button>
+            <button className={`auth-tab ${authTab === 'forgot' ? 'active' : ''}`} onClick={() => { setAuthTab('forgot'); setForgotStep(1); }}>RECUPERAR</button>
           </div>
 
           {authTab === 'login' && (
@@ -1547,7 +1561,7 @@ function App() {
                 <label>SENHA DE ACESSO</label>
                 <input type="password" placeholder="••••••••" required value={loginPass} onChange={e => setLoginPass(e.target.value)} />
               </div>
-              <div style={{ textAlign: 'right', marginTop: '-8px', marginBottom: '16px' }}>
+              <div className="auth-forgot-row">
                 <button
                   type="button"
                   className="auth-link-btn"
@@ -1711,6 +1725,23 @@ function App() {
   const democracyTabKey = userRole === 'admin' ? 'adm-democracy-events' : 'democracy-events';
   const isDemocracyTab = activeTab === 'democracy-events' || activeTab === 'adm-democracy-events';
 
+  const navItems = userRole !== 'admin'
+    ? [
+        { key: 'cit-dashboard', icon: '🪪', label: 'MINHA CARTEIRA', active: activeTab === 'cit-dashboard', go: () => setActiveTab('cit-dashboard') },
+        { key: 'cit-audit', icon: '📜', label: 'LOGS DE AUDITORIA', active: activeTab === 'cit-audit', go: () => setActiveTab('cit-audit') },
+        { key: 'democracy-events', icon: '🗳️', label: 'EVENTOS DA DEMOCRACIA', active: activeTab === 'democracy-events', go: () => setActiveTab('democracy-events') },
+        { key: 'civic-vision', icon: '👁️', label: 'VISÃO CÍVICA', active: activeTab === 'civic-vision', go: () => setActiveTab('civic-vision') },
+      ]
+    : [
+        { key: 'adm-dashboard', icon: '🏛️', label: 'PAINEL ADMINISTRATIVO', active: activeTab === 'adm-dashboard' && detailCitizenId === null, go: () => { setDetailCitizenId(null); setActiveTab('adm-dashboard'); } },
+        { key: 'adm-citizens', icon: '👥', label: 'GESTÃO DE USUÁRIOS', active: activeTab === 'adm-citizens' || detailCitizenId !== null, go: () => { setDetailCitizenId(null); setActiveTab('adm-citizens'); } },
+        { key: 'adm-approvals', icon: '✅', label: 'APROVAÇÕES PENDENTES', active: activeTab === 'adm-approvals', go: () => { setDetailCitizenId(null); setActiveTab('adm-approvals'); } },
+        { key: 'adm-audit', icon: '📜', label: 'LOGS DE AUDITORIA', active: activeTab === 'adm-audit', go: () => { setDetailCitizenId(null); setActiveTab('adm-audit'); } },
+        { key: 'cit-dashboard', icon: '🪪', label: 'MINHA CARTEIRA', active: activeTab === 'cit-dashboard', go: () => setActiveTab('cit-dashboard') },
+        { key: 'adm-democracy-events', icon: '🗳️', label: 'EVENTOS DA DEMOCRACIA', active: activeTab === 'adm-democracy-events', go: () => { setDetailCitizenId(null); setActiveTab('adm-democracy-events'); fetchDemocracyEvents(); } },
+        { key: 'civic-vision', icon: '👁️', label: 'VISÃO CÍVICA', active: activeTab === 'civic-vision', go: () => { setDetailCitizenId(null); setActiveTab('civic-vision'); } },
+      ];
+
   return (
     <div id="app-container" className="app-container active">
       {/* Toast Alert list */}
@@ -1759,26 +1790,33 @@ function App() {
         </div>
       </header>
 
-      {/* Abas de Navegação */}
-      <nav className="main-nav">
-        {userRole !== 'admin' ? (
-          <div className="nav-group active">
-            <button className={`nav-tab ${activeTab === 'cit-dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('cit-dashboard')}>MINHA CARTEIRA</button>
-            <button className={`nav-tab ${activeTab === 'cit-audit' ? 'active' : ''}`} onClick={() => setActiveTab('cit-audit')}>LOGS DE AUDITORIA</button>
-            <button className={`nav-tab ${activeTab === 'democracy-events' ? 'active' : ''}`} onClick={() => setActiveTab('democracy-events')}>EVENTOS DA DEMOCRACIA</button>
-            <button className={`nav-tab ${activeTab === 'civic-vision' ? 'active' : ''}`} onClick={() => setActiveTab('civic-vision')}>VISÃO CÍVICA</button>
-          </div>
-        ) : (
-          <div className="nav-group active">
-            <button className={`nav-tab ${activeTab === 'adm-dashboard' ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('adm-dashboard'); }}>PAINEL ADMINISTRATIVO</button>
-            <button className={`nav-tab ${activeTab === 'adm-citizens' || detailCitizenId !== null ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('adm-citizens'); }}>GESTÃO DE USUÁRIOS</button>
-            <button className={`nav-tab ${activeTab === 'adm-approvals' ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('adm-approvals'); }}>APROVAÇÕES PENDENTES</button>
-            <button className={`nav-tab ${activeTab === 'adm-audit' ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('adm-audit'); }}>LOGS DE AUDITORIA</button>
-            <button className={`nav-tab ${activeTab === 'cit-dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('cit-dashboard')}>MINHA CARTEIRA</button>
-            <button className={`nav-tab ${activeTab === 'adm-democracy-events' ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('adm-democracy-events'); fetchDemocracyEvents(); }}>EVENTOS DA DEMOCRACIA</button>
-            <button className={`nav-tab ${activeTab === 'civic-vision' ? 'active' : ''}`} onClick={() => { setDetailCitizenId(null); setActiveTab('civic-vision'); }}>VISÃO CÍVICA</button>
-          </div>
-        )}
+      {/* Abas de Navegação: no celular vira um menu recolhível (sem scroll lateral) */}
+      <nav className={`main-nav ${navOpen ? 'open' : ''}`}>
+        <button
+          type="button"
+          className="nav-toggle"
+          aria-expanded={navOpen}
+          onClick={() => setNavOpen(o => !o)}
+        >
+          <span className="nav-toggle-label">
+            <span className="nav-toggle-icon">{(navItems.find(n => n.active) || navItems[0]).icon}</span>
+            {(navItems.find(n => n.active) || navItems[0]).label}
+          </span>
+          <span className="nav-toggle-chevron" aria-hidden="true">▾</span>
+        </button>
+        <div className="nav-group active">
+          {navItems.map((item, idx) => (
+            <button
+              key={item.key}
+              className={`nav-tab ${item.active ? 'active' : ''}`}
+              style={{ '--i': idx }}
+              onClick={() => { item.go(); setNavOpen(false); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+            >
+              <span className="nav-tab-icon" aria-hidden="true">{item.icon}</span>
+              <span className="nav-tab-text">{item.label}</span>
+            </button>
+          ))}
+        </div>
       </nav>
 
       {/* Conteúdo Principal */}
@@ -1891,10 +1929,10 @@ function App() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '12px 0', borderTop: '1px solid var(--border-light)', marginTop: '8px' }}>
                         <div className="rank-emblem-box">
                           <img src={rank.logo} alt="Insígnia de Ranking" className="rank-emblem-img" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                          <span style={{ fontSize: '9px', color: 'var(--gold)', fontFamily: 'var(--font-ui)', fontWeight: 700, letterSpacing: '0.5px', marginTop: '4px', textAlign: 'center' }}>RANKING</span>
+                          <span style={{ fontSize: '11px', color: 'var(--gold)', fontFamily: 'var(--font-ui)', fontWeight: 700, letterSpacing: '0.5px', marginTop: '4px', textAlign: 'center' }}>RANKING</span>
                         </div>
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', letterSpacing: '1px' }}>CLASSIFICAÇÃO DO CIDADÃO</div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', letterSpacing: '1px' }}>CLASSIFICAÇÃO DO CIDADÃO</div>
                           <div className="rank-title-badge" style={{ marginTop: '4px', borderColor: rank.badgeColor, color: rank.textColor }}>
                             {rank.title}
                           </div>
@@ -1906,9 +1944,9 @@ function App() {
                   <div className="card-footer">
                     <div className="score-display">
                       <span className="score-label">PONTUAÇÃO ILC ATUAL</span>
-                      <span className="score-number font-hero success-glow">{citizenData.profile.current_score}</span>
+                      <CountUp className="score-number font-hero success-glow" value={citizenData.profile.current_score} />
                     </div>
-                    <div className="card-barcode">|||| | ||| | || |||| | ||| ||||</div>
+                    <div className="card-barcode" aria-hidden="true"></div>
                   </div>
                 </div>
               </div>
@@ -2267,15 +2305,15 @@ function App() {
             <div className="stats-row">
               <div className="stat-card">
                 <span className="stat-label">POPULAÇÃO MONITORADA</span>
-                <span className="stat-value font-hero text-gold">{adminMetrics.total_citizens}</span>
+                <CountUp className="stat-value font-hero text-gold" value={adminMetrics.total_citizens} />
               </div>
               <div className="stat-card">
                 <span className="stat-label">MÉDIA NACIONAL ILC</span>
-                <span className="stat-value font-hero text-success">{adminMetrics.average_score}</span>
+                <CountUp className="stat-value font-hero text-success" value={adminMetrics.average_score} />
               </div>
               <div className="stat-card">
                 <span className="stat-label">VIGILÂNCIA MÁXIMA</span>
-                <span className="stat-value font-hero text-warning">{adminMetrics.alert_count}</span>
+                <CountUp className="stat-value font-hero text-warning" value={adminMetrics.alert_count} />
               </div>
             </div>
 
@@ -2461,8 +2499,10 @@ function App() {
                             )}
                           </td>
                           <td>
-                            <span className="text-gold">@{cit.username}</span><br />
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{cit.email || 'Sem e-mail'}</span>
+                            <div className="cell-stack">
+                              <span className="text-gold">@{cit.username}</span>
+                              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{cit.email || 'Sem e-mail'}</span>
+                            </div>
                           </td>
                           <td>
                             <span className={`role-badge role-${cit.role_name}`}>
@@ -3130,7 +3170,7 @@ function App() {
                 rows="7"
                 value={wahaCustomMessage}
                 onChange={e => setWahaCustomMessage(e.target.value)}
-                style={{ fontFamily: 'monospace', fontSize: '12px', lineHeight: '1.6' }}
+                style={{ fontFamily: 'var(--font-body)', fontSize: '14px', lineHeight: '1.6' }}
               />
               <span className="field-desc">Texto pré-formatado do evento. Edite antes de enviar se preferir.</span>
             </div>
