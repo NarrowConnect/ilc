@@ -2872,3 +2872,31 @@ input[type="datetime-local"], input[type="date"], input[type="url"], input[type=
   min-height: 44px;
 }
 input::-webkit-calendar-picker-indicator { filter: invert(80%) sepia(40%) saturate(500%) hue-rotate(5deg); cursor: pointer; }
+
+/* ==========================================================
+   ÍCONES OUTLINE (Lucide SVG) — padrão único do app
+   ========================================================== */
+.ilc-icon { display: inline-block; vertical-align: -0.18em; flex-shrink: 0; stroke: currentColor; }
+.state-btn .ilc-icon, .sim-btn .ilc-icon, .auth-link-btn .ilc-icon, .modal-title .ilc-icon,
+label .ilc-icon, .audit-action-badge .ilc-icon, .audit-entity-badge .ilc-icon, .audit-date .ilc-icon,
+.audit-author .ilc-icon, .decoration-status-pill .ilc-icon { margin-right: 4px; }
+.sim-btn { display: inline-flex; align-items: center; justify-content: center; gap: 2px; }
+.text-gold.ilc-icon { color: var(--gold); }
+.nav-tab-icon, .nav-toggle-icon { display: inline-flex; color: var(--gold); }
+.nav-tab-icon .ilc-icon, .nav-toggle-icon .ilc-icon { vertical-align: middle; }
+.event-cat-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 10px;
+  color: var(--gold); border: 1px solid var(--border-light); background: rgba(212,175,55,.08);
+  transition: transform .3s var(--ease-spring), background .2s ease;
+}
+.bento-card:hover .event-cat-icon { transform: rotate(-6deg) scale(1.06); background: rgba(212,175,55,.16); }
+.decoration-icon-box { color: var(--gold); }
+.decoration-card.locked .decoration-icon-box { color: var(--text-muted); }
+.decoration-card .ilc-icon { transition: transform .35s var(--ease-spring); }
+.decoration-card.unlocked:hover .ilc-icon { transform: scale(1.12) rotate(-4deg); }
+@keyframes ilc-spin { to { transform: rotate(360deg); } }
+.ilc-spin-slow { animation: ilc-spin 2.4s linear infinite; }
+.state-btn:hover .ilc-icon.lucide-refresh-cw, .sim-btn:hover .ilc-icon.lucide-refresh-cw { animation: ilc-spin .8s ease; }
+.event-actions > * { flex: 1 1 calc(50% - 4px) !important; min-width: 0; min-height: 40px; white-space: nowrap; }
+.event-actions .ilc-icon { margin-right: 4px; }

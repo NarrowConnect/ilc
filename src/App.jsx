@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import CountUp from './components/CountUp.jsx';
+import Icon, { CATEGORY_ICON } from './components/Icon.jsx';
 import { Browser } from '@capacitor/browser';
 import ScoreChart from './components/ScoreChart';
 import CertificatesGrid from './components/CertificatesGrid';
@@ -303,7 +304,7 @@ function App() {
     setAdminMetrics(null);
     setDetailCitizenId(null);
     safeStorage.clear();
-    showToast('🔒 Sessão Encerrada', reason, 'warning');
+    showToast('Sessão Encerrada', reason, 'warning');
   };
 
   const parseApiResponse = async (res) => {
@@ -353,44 +354,44 @@ function App() {
   };
 
   const formatAuditEntity = (entity) => {
-    if (!entity) return '⚙️ Geral';
+    if (!entity) return <><Icon name="settings" size={13} /> Geral</>;
     const map = {
-      'users': '👤 Perfil do Cidadão',
-      'user': '👤 Perfil do Cidadão',
-      'score_accounts': '📊 Pontuação ILC',
-      'score_events': '📝 Registro Cívico',
-      'democracy_events': '🗳️ Evento da Democracia',
-      'democracy_event_participants': '🤝 Inscrição em Evento',
-      'user_certificates': '📜 Certificado de Mérito',
-      'merit_certificates': '📜 Certificado de Mérito',
-      'system': '⚙️ Sistema Estatal'
+      'users': <><Icon name="user" size={13} /> Perfil do Cidadão</>,
+      'user': <><Icon name="user" size={13} /> Perfil do Cidadão</>,
+      'score_accounts': <><Icon name="chart" size={13} /> Pontuação ILC</>,
+      'score_events': <><Icon name="filepen" size={13} /> Registro Cívico</>,
+      'democracy_events': <><Icon name="vote" size={13} /> Evento da Democracia</>,
+      'democracy_event_participants': <><Icon name="handshake" size={13} /> Inscrição em Evento</>,
+      'user_certificates': <><Icon name="award" size={13} /> Certificado de Mérito</>,
+      'merit_certificates': <><Icon name="award" size={13} /> Certificado de Mérito</>,
+      'system': <><Icon name="settings" size={13} /> Sistema Estatal</>
     };
-    return map[entity.toLowerCase()] || `📁 ${entity.replace(/_/g, ' ').toUpperCase()}`;
+    return map[entity.toLowerCase()] || <><Icon name="folder" size={13} /> {entity.replace(/_/g, ' ').toUpperCase()}</>;
   };
 
   const formatAuditAction = (act) => {
     if (!act) return { label: 'Ação Registrada', color: 'rgba(78, 110, 142, 0.2)', border: '#4E6E8E', text: '#B9B19A' };
     const norm = act.toUpperCase();
     const map = {
-      'CREATE_USER': { label: '🆕 Nova Conta Criada', color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
-      'UPDATE_USER': { label: '✏️ Conta Atualizada', color: 'rgba(78, 110, 142, 0.2)', border: '#4E6E8E', text: '#8EB4E3' },
-      'UPDATE_STATUS': { label: '🔒 Status Alterado', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
-      'UPDATE_AVATAR': { label: '🖼️ Foto Atualizada', color: 'rgba(176, 138, 71, 0.2)', border: '#B08A47', text: '#D4C08A' },
-      'UPDATE_NICKNAME': { label: '🏷️ Apelido Alterado', color: 'rgba(176, 138, 71, 0.2)', border: '#B08A47', text: '#D4C08A' },
-      'UPDATE_SCORE': { label: '⚖️ Pontuação Reajustada', color: 'rgba(176, 138, 71, 0.2)', border: '#B08A47', text: '#D4C08A' },
-      'QUICK_EVENT': { label: '⚡ Atividade Lançada', color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
-      'EVENT_APPROVED': { label: '✅ Evento Aprovado', color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
-      'EVENT_REJECTED': { label: '❌ Evento Rejeitado', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
-      'GRANT_CERTIFICATE': { label: '🎖️ Outorga de Certificado', color: 'rgba(176, 138, 71, 0.25)', border: '#B08A47', text: '#FFD700' },
-      'CREATE_DEMOCRACY_EVENT': { label: '📅 Evento Agendado', color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
-      'UPDATE_DEMOCRACY_EVENT': { label: '📝 Evento Editado', color: 'rgba(78, 110, 142, 0.2)', border: '#4E6E8E', text: '#8EB4E3' },
-      'DELETE_DEMOCRACY_EVENT': { label: '🗑️ Evento Excluído', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
-      'REGISTER_DEMOCRACY_EVENT': { label: '🙋 Inscrição Confirmada', color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
-      'CANCEL_DEMOCRACY_EVENT': { label: '🚫 Inscrição Cancelada', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
-      'PROMOTE_ADMIN': { label: '⭐ Promovido a Admin', color: 'rgba(176, 138, 71, 0.25)', border: '#B08A47', text: '#FFD700' },
-      'DEMOTE_ADMIN': { label: '⬇️ Admin Rebaixado', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
-      'DELETE_USER': { label: '🗑️ Usuário Excluído', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
-      'OWNER_BOOTSTRAP_ADMIN': { label: '👑 Dono Virou Admin', color: 'rgba(176, 138, 71, 0.25)', border: '#B08A47', text: '#FFD700' },
+      'CREATE_USER': { label: <><Icon name="userplus" size={13} /> Nova Conta Criada</>, color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
+      'UPDATE_USER': { label: <><Icon name="pencil" size={13} /> Conta Atualizada</>, color: 'rgba(78, 110, 142, 0.2)', border: '#4E6E8E', text: '#8EB4E3' },
+      'UPDATE_STATUS': { label: <><Icon name="lock" size={13} /> Status Alterado</>, color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
+      'UPDATE_AVATAR': { label: <><Icon name="image" size={13} /> Foto Atualizada</>, color: 'rgba(176, 138, 71, 0.2)', border: '#B08A47', text: '#D4C08A' },
+      'UPDATE_NICKNAME': { label: <><Icon name="tag" size={13} /> Apelido Alterado</>, color: 'rgba(176, 138, 71, 0.2)', border: '#B08A47', text: '#D4C08A' },
+      'UPDATE_SCORE': { label: <><Icon name="scale" size={13} /> Pontuação Reajustada</>, color: 'rgba(176, 138, 71, 0.2)', border: '#B08A47', text: '#D4C08A' },
+      'QUICK_EVENT': { label: <><Icon name="zap" size={13} /> Atividade Lançada</>, color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
+      'EVENT_APPROVED': { label: <><Icon name="check" size={13} /> Evento Aprovado</>, color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
+      'EVENT_REJECTED': { label: <><Icon name="x" size={13} /> Evento Rejeitado</>, color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
+      'GRANT_CERTIFICATE': { label: <><Icon name="award" size={13} /> Outorga de Certificado</>, color: 'rgba(176, 138, 71, 0.25)', border: '#B08A47', text: '#FFD700' },
+      'CREATE_DEMOCRACY_EVENT': { label: <><Icon name="calendar" size={13} /> Evento Agendado</>, color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
+      'UPDATE_DEMOCRACY_EVENT': { label: <><Icon name="filepen" size={13} /> Evento Editado</>, color: 'rgba(78, 110, 142, 0.2)', border: '#4E6E8E', text: '#8EB4E3' },
+      'DELETE_DEMOCRACY_EVENT': { label: <><Icon name="trash" size={13} /> Evento Excluído</>, color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
+      'REGISTER_DEMOCRACY_EVENT': { label: <><Icon name="hand" size={13} /> Inscrição Confirmada</>, color: 'rgba(115, 179, 58, 0.2)', border: '#73B33A', text: '#73B33A' },
+      'CANCEL_DEMOCRACY_EVENT': { label: <><Icon name="ban" size={13} /> Inscrição Cancelada</>, color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
+      'PROMOTE_ADMIN': { label: <><Icon name="star" size={13} /> Promovido a Admin</>, color: 'rgba(176, 138, 71, 0.25)', border: '#B08A47', text: '#FFD700' },
+      'DEMOTE_ADMIN': { label: <><Icon name="down" size={13} /> Admin Rebaixado</>, color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
+      'DELETE_USER': { label: <><Icon name="trash" size={13} /> Usuário Excluído</>, color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
+      'OWNER_BOOTSTRAP_ADMIN': { label: <><Icon name="crown" size={13} /> Dono Virou Admin</>, color: 'rgba(176, 138, 71, 0.25)', border: '#B08A47', text: '#FFD700' },
     };
     return map[norm] || { label: act.replace(/_/g, ' ').toUpperCase(), color: 'rgba(78, 110, 142, 0.2)', border: '#4E6E8E', text: '#B9B19A' };
   };
@@ -780,7 +781,7 @@ function App() {
       const data = await parseApiResponse(res);
       if (!res.ok) throw new Error(data.error);
 
-      showToast('📲 WhatsApp Enviado', data.message, 'success');
+      showToast('WhatsApp Enviado', data.message, 'success');
       setWahaModalOpen(false);
     } catch (err) {
       showToast('Erro ao Enviar WhatsApp', err.message || 'Falha na notificação via WhatsApp.', 'warning');
@@ -1463,7 +1464,7 @@ function App() {
       const data = await parseApiResponse(res);
       if (!res.ok) throw new Error(data.error);
 
-      showToast('🔑 Código Gerado', data.message, 'success');
+      showToast('Código Gerado', data.message, 'success');
       if (data.code) {
         setResetCode(data.code);
       }
@@ -1506,7 +1507,7 @@ function App() {
       const data = await parseApiResponse(res);
       if (!res.ok) throw new Error(data.error);
 
-      showToast('✅ Senha Alterada', data.message, 'success');
+      showToast('Senha Alterada', data.message, 'success');
       setLoginId(forgotIdentifier);
       setLoginPass('');
       setAuthTab('login');
@@ -1630,17 +1631,7 @@ function App() {
     return { name: 'Alto Comando / Reluzente', color: '#B08A47' };
   };
 
-  const getCategoryIcon = (cat) => {
-    const icons = {
-      'cívico': '🏛️',
-      'cultural': '🎭',
-      'político': '⚖️',
-      'comunitário': '🤝',
-      'educacional': '📚',
-      'ambiental': '🌿'
-    };
-    return icons[cat] || '📋';
-  };
+  const getCategoryIcon = (cat) => <Icon name={CATEGORY_ICON[cat] || 'clipboard'} size={22} />;
 
   const getStatusColor = (status) => {
     const colors = {
@@ -1701,7 +1692,7 @@ function App() {
                     if (loginId) setForgotIdentifier(loginId);
                   }}
                 >
-                  🔑 Esqueceu ou deseja alterar sua senha?
+                  <Icon name="key" size={13} /> Esqueceu ou deseja alterar sua senha?
                 </button>
               </div>
               <button type="submit" className="state-btn primary gold-glow">AUTENTICAR IDENTIDADE</button>
@@ -1804,7 +1795,7 @@ function App() {
                   </button>
                   <div style={{ marginTop: '15px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
                     <button type="button" className="auth-link-btn" onClick={() => setForgotStep(1)}>
-                      ← Novo código
+                      <Icon name="back" size={13} /> Novo código
                     </button>
                     <button type="button" className="auth-link-btn" onClick={() => setAuthTab('login')}>
                       Voltar ao Login
@@ -1857,20 +1848,20 @@ function App() {
 
   const navItems = userRole !== 'admin'
     ? [
-        { key: 'cit-dashboard', icon: '🪪', label: 'MINHA CARTEIRA', active: activeTab === 'cit-dashboard', go: () => setActiveTab('cit-dashboard') },
-        { key: 'cit-audit', icon: '📜', label: 'LOGS DE AUDITORIA', active: activeTab === 'cit-audit', go: () => setActiveTab('cit-audit') },
-        { key: 'democracy-events', icon: '🗳️', label: 'EVENTOS DA DEMOCRACIA', active: activeTab === 'democracy-events', go: () => setActiveTab('democracy-events') },
-        { key: 'civic-vision', icon: '👁️', label: 'VISÃO CÍVICA', active: activeTab === 'civic-vision', go: () => setActiveTab('civic-vision') },
+        { key: 'cit-dashboard', icon: <Icon name="idcard" size={18} />, label: 'MINHA CARTEIRA', active: activeTab === 'cit-dashboard', go: () => setActiveTab('cit-dashboard') },
+        { key: 'cit-audit', icon: <Icon name="scroll" size={18} />, label: 'LOGS DE AUDITORIA', active: activeTab === 'cit-audit', go: () => setActiveTab('cit-audit') },
+        { key: 'democracy-events', icon: <Icon name="vote" size={18} />, label: 'EVENTOS DA DEMOCRACIA', active: activeTab === 'democracy-events', go: () => setActiveTab('democracy-events') },
+        { key: 'civic-vision', icon: <Icon name="eye" size={18} />, label: 'VISÃO CÍVICA', active: activeTab === 'civic-vision', go: () => setActiveTab('civic-vision') },
       ]
     : [
-        { key: 'adm-dashboard', icon: '🏛️', label: 'PAINEL ADMINISTRATIVO', active: activeTab === 'adm-dashboard' && detailCitizenId === null, go: () => { setDetailCitizenId(null); setActiveTab('adm-dashboard'); } },
-        { key: 'adm-citizens', icon: '👥', label: 'GESTÃO DE USUÁRIOS', active: activeTab === 'adm-citizens' || detailCitizenId !== null, go: () => { setDetailCitizenId(null); setActiveTab('adm-citizens'); } },
-        { key: 'adm-approvals', icon: '✅', label: 'APROVAÇÕES PENDENTES', active: activeTab === 'adm-approvals', go: () => { setDetailCitizenId(null); setActiveTab('adm-approvals'); } },
-        { key: 'adm-audit', icon: '📜', label: 'LOGS DE AUDITORIA', active: activeTab === 'adm-audit', go: () => { setDetailCitizenId(null); setActiveTab('adm-audit'); } },
-        { key: 'adm-admins', icon: '🛡️', label: 'ADMINISTRADORES', active: activeTab === 'adm-admins', go: () => { setDetailCitizenId(null); setActiveTab('adm-admins'); } },
-        { key: 'cit-dashboard', icon: '🪪', label: 'MINHA CARTEIRA', active: activeTab === 'cit-dashboard', go: () => setActiveTab('cit-dashboard') },
-        { key: 'adm-democracy-events', icon: '🗳️', label: 'EVENTOS DA DEMOCRACIA', active: activeTab === 'adm-democracy-events', go: () => { setDetailCitizenId(null); setActiveTab('adm-democracy-events'); fetchDemocracyEvents(); } },
-        { key: 'civic-vision', icon: '👁️', label: 'VISÃO CÍVICA', active: activeTab === 'civic-vision', go: () => { setDetailCitizenId(null); setActiveTab('civic-vision'); } },
+        { key: 'adm-dashboard', icon: <Icon name="landmark" size={18} />, label: 'PAINEL ADMINISTRATIVO', active: activeTab === 'adm-dashboard' && detailCitizenId === null, go: () => { setDetailCitizenId(null); setActiveTab('adm-dashboard'); } },
+        { key: 'adm-citizens', icon: <Icon name="users" size={18} />, label: 'GESTÃO DE USUÁRIOS', active: activeTab === 'adm-citizens' || detailCitizenId !== null, go: () => { setDetailCitizenId(null); setActiveTab('adm-citizens'); } },
+        { key: 'adm-approvals', icon: <Icon name="check" size={18} />, label: 'APROVAÇÕES PENDENTES', active: activeTab === 'adm-approvals', go: () => { setDetailCitizenId(null); setActiveTab('adm-approvals'); } },
+        { key: 'adm-audit', icon: <Icon name="scroll" size={18} />, label: 'LOGS DE AUDITORIA', active: activeTab === 'adm-audit', go: () => { setDetailCitizenId(null); setActiveTab('adm-audit'); } },
+        { key: 'adm-admins', icon: <Icon name="shield" size={18} />, label: 'ADMINISTRADORES', active: activeTab === 'adm-admins', go: () => { setDetailCitizenId(null); setActiveTab('adm-admins'); } },
+        { key: 'cit-dashboard', icon: <Icon name="idcard" size={18} />, label: 'MINHA CARTEIRA', active: activeTab === 'cit-dashboard', go: () => setActiveTab('cit-dashboard') },
+        { key: 'adm-democracy-events', icon: <Icon name="vote" size={18} />, label: 'EVENTOS DA DEMOCRACIA', active: activeTab === 'adm-democracy-events', go: () => { setDetailCitizenId(null); setActiveTab('adm-democracy-events'); fetchDemocracyEvents(); } },
+        { key: 'civic-vision', icon: <Icon name="eye" size={18} />, label: 'VISÃO CÍVICA', active: activeTab === 'civic-vision', go: () => { setDetailCitizenId(null); setActiveTab('civic-vision'); } },
       ];
 
   return (
@@ -1933,7 +1924,7 @@ function App() {
             <span className="nav-toggle-icon">{(navItems.find(n => n.active) || navItems[0]).icon}</span>
             {(navItems.find(n => n.active) || navItems[0]).label}
           </span>
-          <span className="nav-toggle-chevron" aria-hidden="true">▾</span>
+          <span className="nav-toggle-chevron" aria-hidden="true"><Icon name="chevron" size={20} /></span>
         </button>
         <div className="nav-group active">
           {navItems.map((item, idx) => (
@@ -1959,7 +1950,7 @@ function App() {
         {activeTab === 'cit-dashboard' && citizenLoading && !citizenData && (
           <section className="tab-pane active" style={{ padding: '60px 20px', textAlign: 'center' }}>
             <div className="bento-card" style={{ maxWidth: '450px', margin: '0 auto', padding: '40px 20px' }}>
-              <div style={{ fontSize: '36px', marginBottom: '12px' }}>⏳</div>
+              <div style={{ marginBottom: '12px', color: 'var(--gold)' }}><Icon name="hourglass" size={36} className="ilc-spin-slow" /></div>
               <h3 style={{ color: 'var(--gold)', marginBottom: '8px', fontFamily: 'var(--font-heading)' }}>SINCRONIZANDO CARTEIRA CÍVICA...</h3>
               <p style={{ color: 'var(--text-muted)', fontSize: '14px' }}>Aguarde enquanto os registros do cidadão são homologados pelo sistema.</p>
             </div>
@@ -1969,13 +1960,13 @@ function App() {
         {activeTab === 'cit-dashboard' && !citizenData && !citizenLoading && (
           <section className="tab-pane active" style={{ padding: '60px 20px', textAlign: 'center' }}>
             <div className="bento-card gold-border" style={{ maxWidth: '500px', margin: '0 auto', padding: '30px' }}>
-              <div style={{ fontSize: '42px', marginBottom: '12px' }}>⚠️</div>
+              <div style={{ marginBottom: '12px', color: '#E26D5C' }}><Icon name="alert" size={42} /></div>
               <h3 style={{ color: '#E26D5C', marginBottom: '10px', fontFamily: 'var(--font-heading)' }}>FALHA DE COMUNICAÇÃO CÍVICA</h3>
               <p style={{ color: 'var(--text-main)', fontSize: '14px', marginBottom: '20px' }}>
                 {citizenError || 'Não foi possível carregar os dados da carteira.'}
               </p>
               <button className="state-btn primary gold-glow" onClick={() => fetchCitizenData()}>
-                🔄 Tentar Novamente
+                <Icon name="refresh" size={15} /> Tentar Novamente
               </button>
             </div>
           </section>
@@ -2019,7 +2010,7 @@ function App() {
                         </div>
                       </div>
                       <button className="change-photo-btn" onClick={() => setPhotoModalOpen(true)}>
-                        📷 Alterar Foto da Carteira
+                        <Icon name="camera" size={13} /> Alterar Foto da Carteira
                       </button>
                     </div>
 
@@ -2142,10 +2133,10 @@ function App() {
                   <h4 className="tier-info-title text-gold">RESTRIÇÕES / PRIVILÉGIOS ATUAIS:</h4>
                   <p className="tier-info-desc">
                     {citizenData.profile.current_score < 3501
-                      ? '⚠️ Restrição cívica: Acesso limitado e monitoramento contínuo pelo Estado.'
+                      ? 'Restrição cívica: Acesso limitado e monitoramento contínuo pelo Estado.'
                       : citizenData.profile.current_score <= 8499
-                        ? '✅ Privilégios regulares: Acesso livre aos serviços cívicos e eventos.'
-                        : '🌟 Condecoração Reluzente: Acesso prioritário, imunidades e honrarias de alto comando.'}
+                        ? 'Privilégios regulares: Acesso livre aos serviços cívicos e eventos.'
+                        : 'Condecoração Reluzente: Acesso prioritário, imunidades e honrarias de alto comando.'}
                   </p>
                 </div>
               </div>
@@ -2222,7 +2213,7 @@ function App() {
                       const actObj = formatAuditAction(log.action);
                       return (
                         <tr key={log.id}>
-                          <td className="audit-date">📅 {formatAuditDate(log.created_at)}</td>
+                          <td className="audit-date"><span><Icon name="calendar" size={13} /> {formatAuditDate(log.created_at)}</span></td>
                           <td><span className="audit-entity-badge">{formatAuditEntity(log.entity_name)}</span></td>
                           <td>
                             <span className="audit-action-badge" style={{ background: actObj.color, border: `1px solid ${actObj.border}`, color: actObj.text }}>
@@ -2285,12 +2276,12 @@ function App() {
                       <div className="form-group">
                         <label>CATEGORIA</label>
                         <select value={newEventCategory} onChange={e => setNewEventCategory(e.target.value)}>
-                          <option value="cívico">🏛️ Cívico</option>
-                          <option value="cultural">🎭 Cultural</option>
-                          <option value="político">⚖️ Político</option>
-                          <option value="comunitário">🤝 Comunitário</option>
-                          <option value="educacional">📚 Educacional</option>
-                          <option value="ambiental">🌿 Ambiental</option>
+                          <option value="cívico">Cívico</option>
+                          <option value="cultural">Cultural</option>
+                          <option value="político">Político</option>
+                          <option value="comunitário">Comunitário</option>
+                          <option value="educacional">Educacional</option>
+                          <option value="ambiental">Ambiental</option>
                         </select>
                       </div>
                       <div className="form-group">
@@ -2325,7 +2316,7 @@ function App() {
             {/* LISTAGEM DE EVENTOS */}
             {democracyEvents.length === 0 ? (
               <div className="bento-card col-12" style={{ textAlign: 'center', padding: '48px' }}>
-                <p style={{ fontSize: '48px', marginBottom: '16px' }}>🗳️</p>
+                <p style={{ marginBottom: '16px', color: 'var(--gold)' }}><Icon name="vote" size={48} strokeWidth={1.25} /></p>
                 <h3 className="card-title">NENHUM EVENTO AGENDADO</h3>
                 <p style={{ color: 'var(--text-muted)', marginTop: '8px' }}>Seja o primeiro a agendar um evento da democracia.</p>
               </div>
@@ -2350,7 +2341,7 @@ function App() {
                         }}>
                           {ev.status.toUpperCase()}
                         </span>
-                        <span style={{ fontSize: '22px' }}>{catIcon}</span>
+                        <span className="event-cat-icon" title={ev.category}>{catIcon}</span>
                       </div>
 
                       <h3 className="card-title" style={{ fontSize: '16px', marginBottom: '8px', lineHeight: '1.3' }}>{ev.title}</h3>
@@ -2363,7 +2354,7 @@ function App() {
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '14px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
-                          <span>📅</span>
+                          <Icon name="calendar" size={15} className="text-gold" />
                           <span style={{ color: 'var(--gold)' }}>
                             {eventDate.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}
                             {' '}às {eventDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
@@ -2371,12 +2362,12 @@ function App() {
                         </div>
                         {ev.location && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
-                            <span>📍</span>
+                            <Icon name="pin" size={15} className="text-gold" />
                             <span style={{ color: 'var(--text-muted)' }}>{ev.location}</span>
                           </div>
                         )}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
-                          <span>👥</span>
+                          <Icon name="users" size={15} className="text-gold" />
                           <span style={{ color: 'var(--text-muted)' }}>
                             {ev.participant_count} inscrito{ev.participant_count !== 1 ? 's' : ''}
                             {ev.max_participants ? ` / ${ev.max_participants} vagas` : ''}
@@ -2384,13 +2375,13 @@ function App() {
                         </div>
                         {ev.creator_name && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px' }}>
-                            <span>🏛️</span>
+                            <Icon name="landmark" size={15} className="text-gold" />
                             <span style={{ color: 'var(--text-muted)' }}>Por @{ev.creator_name}</span>
                           </div>
                         )}
                       </div>
 
-                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <div className="event-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                         {ev.status !== 'cancelado' && ev.status !== 'concluído' && !isPast && (
                           <button
                             className={`state-btn ${ev.is_registered ? 'warning' : 'success'}`}
@@ -2404,14 +2395,14 @@ function App() {
                           <a href={ev.registration_url} target="_blank" rel="noreferrer"
                             className="state-btn outline"
                             style={{ flex: 1, fontSize: '12px', padding: '8px 12px', textDecoration: 'none', textAlign: 'center' }}>
-                            🔗 LINK
+                            <Icon name="link" size={14} /> LINK
                           </a>
                         )}
                         <button className="sim-btn operator" style={{ fontSize: '11px' }} onClick={() => openParticipantsModal(ev)}>
-                          👥 INSCRITOS ({ev.participant_count})
+                          <Icon name="users" size={13} /> INSCRITOS ({ev.participant_count})
                         </button>
                         <button className="sim-btn citizen-high" style={{ fontSize: '11px' }} onClick={() => openWahaModal(ev)}>
-                          📲 WHATSAPP
+                          <Icon name="whatsapp" size={13} /> WHATSAPP
                         </button>
                         {canEdit && (
                           <>
@@ -2685,7 +2676,7 @@ function App() {
         {/* DETALHE DO USUÁRIO INDIVIDUAL (ADMIN) */}
         {detailCitizenId !== null && detailCitizenData && userRole === 'admin' && (
           <section className="tab-pane active">
-            <button className="state-btn outline back-btn" onClick={() => setDetailCitizenId(null)}>← VOLTAR PARA A LISTA</button>
+            <button className="state-btn outline back-btn" onClick={() => setDetailCitizenId(null)}><Icon name="back" size={14} /> VOLTAR PARA A LISTA</button>
 
             <div className="bento-grid" style={{ marginTop: '20px' }}>
               <div className="bento-card col-4">
@@ -2831,10 +2822,10 @@ function App() {
                       const actObj = formatAuditAction(log.action);
                       return (
                         <tr key={log.id}>
-                          <td className="audit-date">📅 {formatAuditDate(log.created_at)}</td>
+                          <td className="audit-date"><span><Icon name="calendar" size={13} /> {formatAuditDate(log.created_at)}</span></td>
                           <td>
                             <span className="audit-author">
-                              👤 {log.actor_name ? `@${log.actor_name}` : 'Sistema Automático'}
+                              <Icon name="user" size={13} /> {log.actor_name ? `@${log.actor_name}` : 'Sistema Automático'}
                             </span>
                           </td>
                           <td><span className="audit-entity-badge">{formatAuditEntity(log.entity_name)}</span></td>
@@ -3023,7 +3014,7 @@ function App() {
                     <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                       <input
                         type="text"
-                        placeholder="🔍 Filtrar cidadão..."
+                        placeholder="Filtrar cidadão..."
                         value={civicUserFilter}
                         onChange={e => setCivicUserFilter(e.target.value)}
                         style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--text)', borderRadius: '6px', padding: '8px 12px', fontSize: '13px', width: '200px' }}
@@ -3042,7 +3033,7 @@ function App() {
                         className="sim-btn admin"
                         style={{ fontSize: '11px' }}
                         onClick={fetchCivicOverview}
-                      >↻ ATUALIZAR</button>
+                      ><Icon name="refresh" size={13} /> ATUALIZAR</button>
                     </div>
                   </div>
 
@@ -3198,7 +3189,7 @@ function App() {
                       ) : civicOverview.upcoming_events.map(ev => {
                         const evDate = new Date(ev.event_date);
                         const isPast = evDate < new Date();
-                        const catIcon = { 'cívico': '🏛️', 'cultural': '🎭', 'político': '⚖️', 'comunitário': '🤝', 'educacional': '📚', 'ambiental': '🌿' }[ev.category] || '📋';
+                        const catIcon = <Icon name={CATEGORY_ICON[ev.category] || 'clipboard'} size={20} />;
                         return (
                           <div key={ev.id} className="cv-upcoming-card">
                             <div className="cv-upcoming-date">
@@ -3208,10 +3199,10 @@ function App() {
                             <div className="cv-upcoming-info">
                               <div className="cv-upcoming-header">
                                 <span className="cv-upcoming-cat">{catIcon} {ev.category.toUpperCase()}</span>
-                                <span className="cv-upcoming-count">👥 {ev.participant_count}</span>
+                                <span className="cv-upcoming-count"><Icon name="users" size={13} /> {ev.participant_count}</span>
                               </div>
                               <h4 className="cv-upcoming-title">{ev.title}</h4>
-                              {ev.location && <span className="cv-upcoming-loc">📍 {ev.location}</span>}
+                              {ev.location && <span className="cv-upcoming-loc"><Icon name="pin" size={13} /> {ev.location}</span>}
                             </div>
                             <div className="cv-upcoming-action">
                               {!isPast && ev.status !== 'cancelado' && ev.status !== 'concluído' && (
@@ -3265,7 +3256,7 @@ function App() {
             </div>
 
             <div className="form-group">
-              <label>📸 TIRAR FOTO COM A CÂMERA (CELULAR / WEBCAM)</label>
+              <label><Icon name="camera" size={13} /> TIRAR FOTO COM A CÂMERA (CELULAR / WEBCAM)</label>
               <input
                 type="file"
                 accept="image/*"
@@ -3280,12 +3271,12 @@ function App() {
                 onClick={() => document.getElementById('camera-input-file').click()}
                 style={{ width: '100%', padding: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', cursor: 'pointer' }}
               >
-                📷 ABRIR CÂMERA E TIRAR FOTO
+                <Icon name="camera" size={16} /> ABRIR CÂMERA E TIRAR FOTO
               </button>
             </div>
 
             <div className="form-group">
-              <label>📁 OU ENVIAR DA GALERIA / COMPUTADOR</label>
+              <label><Icon name="upload" size={13} /> OU ENVIAR DA GALERIA / COMPUTADOR</label>
               <input type="file" accept="image/*" onChange={handleFileUpload} className="file-input" />
             </div>
 
@@ -3336,7 +3327,7 @@ function App() {
             </div>
 
             <div className="form-group">
-              <label>🎖️ PATENTE CÍVICA</label>
+              <label><Icon name="medal" size={13} /> PATENTE CÍVICA</label>
               <select value={editFormRank} onChange={e => setEditFormRank(e.target.value)}>
                 <optgroup label="— PRAÇAS —">
                   <option value="Recruta">Recruta</option>
@@ -3367,7 +3358,7 @@ function App() {
             <div className="form-group">
               <label>URL DO EMBLEMA DA PATENTE (OPCIONAL)</label>
               <input type="text" placeholder="Ex: https://meusite.com/emblemas/coronel.png" value={editFormRankEmblem} onChange={e => setEditFormRankEmblem(e.target.value)} />
-              <span className="field-desc">Imagem PNG/SVG do emblema. Deixe vazio para usar o ícone padrão 🎖️. Veja o guia abaixo para adicionar suas imagens.</span>
+              <span className="field-desc">Imagem PNG/SVG do emblema. Deixe vazio para usar o ícone padrão. Veja o guia abaixo para adicionar suas imagens.</span>
             </div>
 
             <div className="form-group">
@@ -3395,7 +3386,7 @@ function App() {
       {/* MODAL VER INSCRITOS NO EVENTO DA DEMOCRACIA */}
       <div className={`modal-overlay ${participantsModalOpen ? 'active' : ''}`}>
         <div className="modal-card">
-          <h2 className="modal-title">👥 INSCRITOS NO EVENTO</h2>
+          <h2 className="modal-title"><Icon name="users" size={24} /> INSCRITOS NO EVENTO</h2>
           <p className="modal-desc">Cidadãos com inscrição confirmada em <strong>{selectedEventTitle}</strong>.</p>
 
           <div style={{ maxHeight: '350px', overflowY: 'auto', marginBottom: '20px' }}>
@@ -3434,7 +3425,7 @@ function App() {
       {/* MODAL NOTIFICAR WHATSAPP */}
       <div className={`modal-overlay ${wahaModalOpen ? 'active' : ''}`}>
         <div className="modal-card">
-          <h2 className="modal-title">📲 ENVIAR PARA WHATSAPP</h2>
+          <h2 className="modal-title"><Icon name="whatsapp" size={24} /> ENVIAR PARA WHATSAPP</h2>
           <p className="modal-desc">
             {wahaEvent
               ? 'Envie uma mensagem sobre o evento diretamente para o grupo oficial no WhatsApp.'
@@ -3456,7 +3447,7 @@ function App() {
             <div className="form-buttons">
               <button type="button" className="state-btn secondary" onClick={() => setWahaModalOpen(false)}>CANCELAR</button>
               <button type="submit" className="state-btn primary gold-glow" disabled={wahaSending}>
-                {wahaSending ? 'ENVIANDO...' : '📲 ENVIAR WHATSAPP'}
+                {wahaSending ? 'ENVIANDO...' : <><Icon name="whatsapp" size={15} /> ENVIAR WHATSAPP</>}
               </button>
             </div>
           </form>
