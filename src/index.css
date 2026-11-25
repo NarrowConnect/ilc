@@ -2478,3 +2478,16 @@ button, input, select, textarea, a, .nav-tab, .sim-btn, .auth-tab {
   .admins-item, .admins-notice, .admins-confirm { animation: none; }
   .admins-btn, .admins-item { transition: none; }
 }
+
+/* Exclusão de usuário */
+.sim-btn.danger { border-color: rgba(239, 68, 68, 0.7); color: #FCA5A5; }
+.sim-btn.danger:hover { background: rgba(239, 68, 68, 0.12); }
+.delete-user-btn { width: 100%; margin-top: 12px; }
+.delete-user-label {
+  display: block;
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+.delete-user-label strong { color: var(--text); }

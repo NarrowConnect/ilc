@@ -211,6 +211,9 @@ function App() {
   const [adminCandidates, setAdminCandidates] = useState([]);
   const [adminRoleBusyId, setAdminRoleBusyId] = useState(null);
   const [adminRoleConfirm, setAdminRoleConfirm] = useState(null); // { user, role }
+  const [deleteUserTarget, setDeleteUserTarget] = useState(null); // { id, username }
+  const [deleteUserConfirmText, setDeleteUserConfirmText] = useState('');
+  const [deleteUserBusy, setDeleteUserBusy] = useState(false);
 
   // Logs de auditoria do usuário comum
   const [citizenAuditLogs, setCitizenAuditLogs] = useState([]);
@@ -372,6 +375,7 @@ function App() {
       'CANCEL_DEMOCRACY_EVENT': { label: '🚫 Inscrição Cancelada', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
       'PROMOTE_ADMIN': { label: '⭐ Promovido a Admin', color: 'rgba(176, 138, 71, 0.25)', border: '#B08A47', text: '#FFD700' },
       'DEMOTE_ADMIN': { label: '⬇️ Admin Rebaixado', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
+      'DELETE_USER': { label: '🗑️ Usuário Excluído', color: 'rgba(138, 61, 47, 0.2)', border: '#8A3D2F', text: '#E26D5C' },
       'OWNER_BOOTSTRAP_ADMIN': { label: '👑 Dono Virou Admin', color: 'rgba(176, 138, 71, 0.25)', border: '#B08A47', text: '#FFD700' },
     };
     return map[norm] || { label: act.replace(/_/g, ' ').toUpperCase(), color: 'rgba(78, 110, 142, 0.2)', border: '#4E6E8E', text: '#B9B19A' };
@@ -1217,6 +1221,38 @@ function App() {
       showToast('Não Foi Possível Alterar', err.message || 'Falha ao alterar o papel.', 'warning');
     } finally {
       setAdminRoleBusyId(null);
+    }
+  };
+
+  const openDeleteUser = (user) => {
+    setDeleteUserTarget({ id: user.id, username: user.username });
+    setDeleteUserConfirmText('');
+  };
+
+  const confirmDeleteUser = async () => {
+    if (!deleteUserTarget) return;
+    setDeleteUserBusy(true);
+    try {
+      const res = await fetchWithTimeout(`${API_BASE}/admin/citizens/${deleteUserTarget.id}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ confirm_username: deleteUserConfirmText.trim() })
+      });
+      const data = await parseApiResponse(res);
+      if (!res.ok) throw new Error(data.error);
+      showToast('Usuário Excluído', data.message, 'success');
+      if (detailCitizenId === deleteUserTarget.id) setDetailCitizenId(null);
+      setDeleteUserTarget(null);
+      setDeleteUserConfirmText('');
+      fetchAdminCitizens();
+      if (activeTab === 'adm-admins') fetchAdminList();
+    } catch (err) {
+      showToast('Não Foi Possível Excluir', err.message || 'Falha ao excluir o usuário.', 'warning');
+    } finally {
+      setDeleteUserBusy(false);
     }
   };
 
@@ -2579,6 +2615,7 @@ function App() {
                           <td style={{ display: 'flex', gap: '6px' }}>
                             <button className="sim-btn admin" onClick={() => openAdminEditUserModal(cit)}>EDITAR</button>
                             <button className="sim-btn operator" onClick={() => setDetailCitizenId(cit.id)}>DETALHAR</button>
+                            <button className="sim-btn danger" onClick={() => openDeleteUser(cit)}>EXCLUIR</button>
                           </td>
                         </tr>
                       );
@@ -2645,6 +2682,7 @@ function App() {
                   <button className="state-btn success" onClick={() => changeCitizenStatus('active')}>ATIVAR CONTA</button>
                   <button className="state-btn warning" onClick={() => changeCitizenStatus('blocked')}>BLOQUEAR ACESSO</button>
                 </div>
+                <button className="admins-btn demote delete-user-btn" onClick={() => openDeleteUser(detailCitizenData.citizen)}>Excluir usuário</button>
               </div>
 
               <div className="bento-card col-8">
@@ -2774,6 +2812,40 @@ function App() {
               </table>
             </div>
           </section>
+        )}
+
+        {/* Confirmação de exclusão de usuário (admin) */}
+        {deleteUserTarget && userRole === 'admin' && (
+          <div className="modal-overlay active" onClick={() => !deleteUserBusy && setDeleteUserTarget(null)}>
+            <div className="modal-card admins-confirm" onClick={e => e.stopPropagation()}>
+              <h3 className="modal-title">Excluir @{deleteUserTarget.username}?</h3>
+              <p className="modal-desc">
+                A conta, a pontuação, os certificados e as inscrições em eventos serão apagados de vez. Isso não pode ser desfeito.
+                Se quiser só impedir o acesso, use "Bloquear acesso".
+              </p>
+              <label className="delete-user-label" htmlFor="delete-user-confirm">Digite <strong>{deleteUserTarget.username}</strong> para confirmar</label>
+              <input
+                id="delete-user-confirm"
+                type="text"
+                className="admins-search"
+                value={deleteUserConfirmText}
+                onChange={e => setDeleteUserConfirmText(e.target.value)}
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck="false"
+              />
+              <div className="admins-confirm-actions" style={{ marginTop: '16px' }}>
+                <button className="admins-btn" disabled={deleteUserBusy} onClick={() => setDeleteUserTarget(null)}>Cancelar</button>
+                <button
+                  className="admins-btn demote"
+                  disabled={deleteUserBusy || deleteUserConfirmText.trim() !== deleteUserTarget.username}
+                  onClick={confirmDeleteUser}
+                >
+                  {deleteUserBusy ? 'Excluindo...' : 'Excluir de vez'}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* ========================================== */}

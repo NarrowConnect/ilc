@@ -1588,6 +1588,65 @@ app.get('/api/admin/admins/candidates', authenticateToken, requireRole(['admin']
   }
 });
 
+// Exclui um usuário de vez (pontuação, certificados e inscrições vão junto).
+// Exige { confirm_username } igual ao nickname, para evitar exclusão por engano.
+app.delete('/api/admin/citizens/:id', authenticateToken, requireRole(['admin']), async (req, res) => {
+  const targetId = req.params.id;
+  const { confirm_username } = req.body || {};
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const targetRes = await client.query('SELECT id, username, email, celular, google_id, status, hierarchy_title FROM users WHERE id = $1', [targetId]);
+    if (targetRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+    const target = targetRes.rows[0];
+    if (String(target.id) === String(req.user.id)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Você não pode excluir a sua própria conta pelo painel.' });
+    }
+    if (isOwnerAccount(target)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'O dono do sistema (OWNER_EMAILS) não pode ser excluído pelo app.' });
+    }
+    if (!confirm_username || String(confirm_username).trim() !== target.username) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Digite o nickname exato do usuário para confirmar a exclusão.' });
+    }
+    const targetRole = await getUserRoleName(client, target.id);
+    if (targetRole === 'admin' && await countAdmins(client) <= 1) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Não é possível excluir o último administrador ativo.' });
+    }
+    const scoreRes = await client.query('SELECT current_score FROM score_accounts WHERE user_id = $1', [target.id]);
+    await client.query('DELETE FROM users WHERE id = $1', [target.id]);
+    await client.query(
+      `INSERT INTO audit_logs (actor_user_id, entity_name, entity_id, action, old_data, new_data)
+       VALUES ($1, 'users', $2, 'delete_user', $3, $4)`,
+      [
+        req.user.id,
+        target.id,
+        JSON.stringify({
+          username: target.username,
+          email: target.email,
+          role: targetRole,
+          status: target.status,
+          score: scoreRes.rows.length ? scoreRes.rows[0].current_score : null
+        }),
+        JSON.stringify({ deleted: true, username: target.username })
+      ]
+    );
+    await client.query('COMMIT');
+    res.json({ success: true, message: `@${target.username} foi excluído do sistema.` });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: 'Falha ao excluir usuário: ' + err.message });
+  } finally {
+    client.release();
+  }
+});
+
 // Promove (role = 'admin') ou rebaixa (role = 'usuario') um usuário
 app.post('/api/admin/users/:id/role', authenticateToken, requireRole(['admin']), async (req, res) => {
   const targetId = req.params.id;
