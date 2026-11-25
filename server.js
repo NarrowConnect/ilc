@@ -1,5 +1,6 @@
 const express = require('express');
-const { pool, initSchema, snapshotTo, scheduleBackups, DB_PATH } = require('./db');
+const { pool, initSchema, snapshotTo, scheduleBackups, DB_PATH, verifyBackupFile, getBackupStatus, isDataDirMounted, RESTORE_PATH } = require('./db');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const bcrypt = require('bcryptjs');
@@ -2425,6 +2426,77 @@ app.get('/api/admin/backup', authenticateToken, requireRole(['admin']), async (r
   } catch (err) {
     fs.unlink(tmpPath, () => {});
     res.status(500).json({ error: 'Erro ao gerar backup do banco: ' + err.message });
+  }
+});
+
+// Situação dos backups: volume montado, último backup e arquivos guardados (somente admin)
+app.get('/api/admin/backup/status', authenticateToken, requireRole(['admin']), (req, res) => {
+  try {
+    res.json(getBackupStatus());
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao ler situação dos backups: ' + err.message });
+  }
+});
+
+// Restaurar o banco a partir de um arquivo .db enviado (somente admin).
+// O arquivo é verificado, guardado como data/restaurar.db e o servidor reinicia para aplicá-lo.
+// O banco atual é preservado em backups/antes-da-restauracao-*.db.
+app.post('/api/admin/backup/restore', authenticateToken, requireRole(['admin']),
+  express.raw({ type: '*/*', limit: '500mb' }),
+  async (req, res) => {
+    const tmp = `${RESTORE_PATH}.envio`;
+    try {
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({ error: 'Envie o arquivo .db no corpo da requisição.' });
+      }
+      fs.writeFileSync(tmp, req.body);
+      const check = verifyBackupFile(tmp);
+      if (!check.ok) {
+        fs.unlinkSync(tmp);
+        return res.status(400).json({ error: `Arquivo recusado: ${check.error}` });
+      }
+      fs.renameSync(tmp, RESTORE_PATH);
+      await pool.query(
+        `INSERT INTO audit_logs (actor_user_id, entity_name, action, new_data)
+         VALUES ($1, 'database', 'restore_backup', $2)`,
+        [req.user.id, JSON.stringify({ bytes: req.body.length, users: check.users })]
+      );
+      res.json({ ok: true, users: check.users, message: 'Backup aceito. O servidor vai reiniciar e aplicar a restauração em instantes.' });
+      setTimeout(() => {
+        console.log('♻️  Reiniciando para aplicar a restauração do banco...');
+        process.exit(1); // o Easypanel/Docker sobe o container de novo
+      }, 1500);
+    } catch (err) {
+      fs.unlink(tmp, () => {});
+      res.status(500).json({ error: 'Erro ao receber backup: ' + err.message });
+    }
+  });
+
+// Backup externo: usado pelo GitHub Actions (backup-offsite.yml) para levar uma cópia para fora da VPS.
+// Só funciona se a variável BACKUP_TOKEN (mín. 32 caracteres) estiver definida no servidor.
+app.get('/api/backup/offsite', async (req, res) => {
+  const expected = process.env.BACKUP_TOKEN || '';
+  const given = String(req.get('x-backup-token') || '');
+  const valid = expected.length >= 32 && given.length === expected.length &&
+    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+  if (!valid) return res.status(404).json({ error: 'Not found' });
+
+  const tmpPath = path.join(os.tmpdir(), `ilc-offsite-${Date.now()}.db`);
+  try {
+    await snapshotTo(tmpPath);
+    const mounted = isDataDirMounted();
+    res.set('X-ILC-Volume', mounted === false ? 'not-mounted' : mounted ? 'mounted' : 'unknown');
+    await pool.query(
+      `INSERT INTO audit_logs (actor_user_id, entity_name, action, new_data)
+       VALUES (NULL, 'database', 'offsite_backup', $1)`,
+      [JSON.stringify({ volume: mounted })]
+    );
+    res.download(tmpPath, 'ilc.db', () => {
+      fs.unlink(tmpPath, () => {});
+    });
+  } catch (err) {
+    fs.unlink(tmpPath, () => {});
+    res.status(500).json({ error: 'Erro ao gerar backup: ' + err.message });
   }
 });
 

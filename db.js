@@ -18,7 +18,118 @@ const BACKUP_DIR = path.join(path.dirname(DB_PATH), 'backups');
 const BACKUP_KEEP = parseInt(process.env.BACKUP_KEEP || '7', 10);
 const SCHEMA_PATH = path.join(__dirname, 'SQL', 'sqlite_schema.sql');
 
+const BACKUP_KEEP_MONTHLY = parseInt(process.env.BACKUP_KEEP_MONTHLY || '12', 10);
+const STARTUP_BACKUP_KEEP = 5;
+// Coloque um arquivo com este nome na pasta de dados e reinicie para restaurar
+const RESTORE_PATH = path.join(path.dirname(DB_PATH), 'restaurar.db');
+
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+
+// ------------------------------------------
+// Verificações de backup (usadas antes de abrir o banco principal)
+// ------------------------------------------
+
+// Abre um arquivo .db em modo leitura e confirma que está íntegro e é do ILC
+function verifyBackupFile(file) {
+  let check;
+  try {
+    const fd = fs.openSync(file, 'r');
+    const header = Buffer.alloc(16);
+    fs.readSync(fd, header, 0, 16, 0);
+    fs.closeSync(fd);
+    if (header.toString('latin1') !== 'SQLite format 3\0') {
+      return { ok: false, error: 'não é um arquivo SQLite' };
+    }
+    check = new DatabaseSync(file, { readOnly: true });
+    const integrity = check.prepare('PRAGMA integrity_check').get();
+    const result = Object.values(integrity)[0];
+    if (result !== 'ok') return { ok: false, error: `integridade: ${result}` };
+    const hasUsers = check.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
+    if (!hasUsers) return { ok: false, error: 'tabela users ausente (não é um banco do ILC)' };
+    const users = check.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+    return { ok: true, users };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  } finally {
+    if (check) check.close();
+  }
+}
+
+// A pasta de dados precisa ser um volume montado; sem isso o banco some a cada deploy
+function isDataDirMounted() {
+  try {
+    const dir = path.resolve(path.dirname(DB_PATH));
+    const mounts = fs.readFileSync('/proc/self/mountinfo', 'utf8').split('\n');
+    return mounts.some((line) => line.split(' ')[4] === dir);
+  } catch {
+    return null; // fora do Linux (ex.: desenvolvimento no Windows) não dá para saber
+  }
+}
+
+function timestamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
+function pruneBackups(pattern, keep) {
+  const files = fs.readdirSync(BACKUP_DIR).filter((f) => pattern.test(f)).sort();
+  while (files.length > keep) {
+    fs.unlinkSync(path.join(BACKUP_DIR, files.shift()));
+  }
+}
+
+// Restauração: se existir data/restaurar.db, ele vira o banco ativo nesta inicialização.
+// O banco atual é guardado antes em backups/antes-da-restauracao-*.db.
+function applyPendingRestore() {
+  if (!fs.existsSync(RESTORE_PATH)) return;
+  const check = verifyBackupFile(RESTORE_PATH);
+  if (!check.ok) {
+    const rejected = `${RESTORE_PATH}.invalido-${timestamp()}`;
+    fs.renameSync(RESTORE_PATH, rejected);
+    console.error(`❌ Restauração cancelada (${check.error}). Arquivo movido para ${rejected}. O banco atual foi mantido.`);
+    return;
+  }
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  if (fs.existsSync(DB_PATH)) {
+    const current = new DatabaseSync(DB_PATH);
+    const saved = path.join(BACKUP_DIR, `antes-da-restauracao-${timestamp()}.db`);
+    current.exec(`VACUUM INTO '${saved.replace(/'/g, "''")}'`);
+    current.close();
+    console.log(`💾 Banco anterior guardado em ${saved}`);
+  }
+  for (const suffix of ['', '-wal', '-shm']) {
+    if (fs.existsSync(DB_PATH + suffix)) fs.unlinkSync(DB_PATH + suffix);
+  }
+  fs.renameSync(RESTORE_PATH, DB_PATH);
+  console.log(`♻️  Banco restaurado a partir de restaurar.db (${check.users} usuários).`);
+}
+
+// Cópia de segurança a cada inicialização, antes das migrações do schema
+function startupBackup() {
+  if (!fs.existsSync(DB_PATH) || fs.statSync(DB_PATH).size === 0) return;
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const target = path.join(BACKUP_DIR, `inicio-${timestamp()}.db`);
+    const conn = new DatabaseSync(DB_PATH);
+    conn.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+    conn.close();
+    pruneBackups(/^inicio-.*\.db$/, STARTUP_BACKUP_KEEP);
+    console.log(`💾 Backup de inicialização salvo em ${target}`);
+  } catch (err) {
+    console.error('❌ Falha no backup de inicialização:', err.message);
+  }
+}
+
+applyPendingRestore();
+startupBackup();
+
+const MOUNTED = isDataDirMounted();
+if (MOUNTED === false) {
+  console.error('');
+  console.error('🚨🚨🚨 ATENÇÃO: a pasta do banco NÃO é um volume montado:', path.dirname(DB_PATH));
+  console.error('🚨 Os dados e backups serão PERDIDOS no próximo deploy.');
+  console.error('🚨 No Easypanel: serviço -> Mounts -> Add Volume -> Mount Path /usr/src/app/data');
+  console.error('');
+}
 
 const db = new DatabaseSync(DB_PATH);
 db.exec(`
@@ -270,17 +381,25 @@ async function snapshotTo(targetPath) {
   return targetPath;
 }
 
+// Backup diário verificado + 1 cópia mensal. Retenção: BACKUP_KEEP diários e BACKUP_KEEP_MONTHLY mensais.
 async function runDailyBackup() {
   try {
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const today = new Date().toISOString().slice(0, 10);
     const target = path.join(BACKUP_DIR, backupFileName());
-    if (fs.existsSync(target)) return;
-    await snapshotTo(target);
-    const files = fs.readdirSync(BACKUP_DIR).filter((f) => /^ilc-\d{4}-\d{2}-\d{2}\.db$/.test(f)).sort();
-    while (files.length > BACKUP_KEEP) {
-      fs.unlinkSync(path.join(BACKUP_DIR, files.shift()));
+    if (!fs.existsSync(target)) {
+      await snapshotTo(target);
+      const check = verifyBackupFile(target);
+      if (!check.ok) {
+        fs.unlinkSync(target);
+        throw new Error(`cópia gerada não passou na verificação (${check.error})`);
+      }
+      console.log(`💾 Backup diário do banco salvo em ${target} (${check.users} usuários, verificado)`);
     }
-    console.log(`💾 Backup diário do banco salvo em ${target}`);
+    const monthly = path.join(BACKUP_DIR, `ilc-mensal-${today.slice(0, 7)}.db`);
+    if (!fs.existsSync(monthly)) fs.copyFileSync(target, monthly);
+    pruneBackups(/^ilc-\d{4}-\d{2}-\d{2}\.db$/, BACKUP_KEEP);
+    pruneBackups(/^ilc-mensal-\d{4}-\d{2}\.db$/, BACKUP_KEEP_MONTHLY);
   } catch (err) {
     console.error('❌ Falha no backup diário do banco:', err.message);
   }
@@ -291,6 +410,32 @@ function scheduleBackups() {
   setInterval(runDailyBackup, 60 * 60 * 1000).unref(); // verifica de hora em hora; grava 1 por dia
 }
 
+// Resumo para o painel/admin: volume montado e lista de backups
+function getBackupStatus() {
+  let files = [];
+  if (fs.existsSync(BACKUP_DIR)) {
+    files = fs.readdirSync(BACKUP_DIR)
+      .filter((f) => f.endsWith('.db'))
+      .map((f) => {
+        const st = fs.statSync(path.join(BACKUP_DIR, f));
+        return { file: f, bytes: st.size, modifiedAt: st.mtime.toISOString() };
+      })
+      .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+  }
+  const daily = files.filter((f) => /^ilc-\d{4}-\d{2}-\d{2}\.db$/.test(f.file));
+  return {
+    volumeMounted: MOUNTED,
+    dbPath: DB_PATH,
+    dbBytes: fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0,
+    backupDir: BACKUP_DIR,
+    keepDaily: BACKUP_KEEP,
+    keepMonthly: BACKUP_KEEP_MONTHLY,
+    lastDailyBackup: daily[0] || null,
+    offsiteConfigured: Boolean(process.env.BACKUP_TOKEN),
+    files
+  };
+}
+
 module.exports = {
   pool,
   db,
@@ -299,5 +444,9 @@ module.exports = {
   initSchema,
   getUserVersion,
   snapshotTo,
-  scheduleBackups
+  scheduleBackups,
+  verifyBackupFile,
+  getBackupStatus,
+  isDataDirMounted: () => MOUNTED,
+  RESTORE_PATH
 };

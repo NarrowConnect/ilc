@@ -1,0 +1,94 @@
+# Backup externo diário do banco do ILC (cópia fora da VPS).
+#
+# Todo dia às 03:00 (Brasília) baixa uma cópia consistente do banco pelo endpoint
+# /api/backup/offsite, confere a integridade, cifra com senha e guarda como artifact
+# desta execução por 90 dias. Se algo falhar (servidor fora, backup inválido, volume
+# do Easypanel não montado), a execução fica vermelha e o GitHub avisa por e-mail.
+#
+# Configuração (Settings -> Secrets and variables -> Actions -> New repository secret):
+#   BACKUP_TOKEN       mesmo valor da variável BACKUP_TOKEN no Easypanel (mín. 32 caracteres)
+#   BACKUP_PASSPHRASE  senha para cifrar os backups (mín. 16 caracteres). GUARDE-A: sem ela não há restauração.
+# Opcional (aba Variables): BACKUP_URL, padrão https://ilc.narrowconnect.com.br
+#
+# Restaurar: baixe o artifact da execução, descompacte e rode
+#   BACKUP_PASSPHRASE='...' node scripts/backup-crypto.js decrypt ilc-AAAA-MM-DD.db.enc ilc.db
+name: Backup externo do banco
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-offsite
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Conferir secrets
+        env:
+          BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          if [ ${#BACKUP_TOKEN} -lt 32 ] || [ ${#BACKUP_PASSPHRASE} -lt 16 ]; then
+            echo "::error::Configure os secrets BACKUP_TOKEN (32+ caracteres) e BACKUP_PASSPHRASE (16+ caracteres)."
+            exit 1
+          fi
+
+      - name: Baixar banco do servidor
+        env:
+          BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
+          BACKUP_URL: ${{ vars.BACKUP_URL || 'https://ilc.narrowconnect.com.br' }}
+        run: |
+          curl -fsS --retry 3 --retry-delay 20 --max-time 600 \
+            -H "X-Backup-Token: $BACKUP_TOKEN" \
+            -D headers.txt -o ilc.db "$BACKUP_URL/api/backup/offsite"
+          ls -lh ilc.db
+
+      - name: Verificar integridade
+        run: |
+          node -e "
+            const { DatabaseSync } = require('node:sqlite');
+            const db = new DatabaseSync('ilc.db', { readOnly: true });
+            const r = Object.values(db.prepare('PRAGMA integrity_check').get())[0];
+            if (r !== 'ok') { console.error('::error::Backup corrompido: ' + r); process.exit(1); }
+            const users = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+            if (users < 1) { console.error('::error::Backup sem usuários'); process.exit(1); }
+            console.log('Integridade ok, usuários:', users);
+          "
+
+      - name: Cifrar
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          echo "NAME=ilc-$(date -u +%F)" >> "$GITHUB_ENV"
+          node scripts/backup-crypto.js encrypt ilc.db "ilc-$(date -u +%F).db.enc"
+          rm -f ilc.db
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: ${{ env.NAME }}.db.enc
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Conferir volume do Easypanel
+        run: |
+          volume=$(grep -i '^x-ilc-volume:' headers.txt | tr -d '\r' | awk '{print $2}')
+          echo "Volume: ${volume:-desconhecido}"
+          if [ "$volume" = "not-mounted" ]; then
+            echo "::error::O banco NÃO está em um volume no Easypanel. Os dados somem no próximo deploy! Monte um Volume em /usr/src/app/data."
+            exit 1
+          fi

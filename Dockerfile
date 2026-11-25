@@ -51,7 +51,8 @@ ENV DATA_DIR=/usr/src/app/data
 # Criar usuário não-root e ajustar permissões
 RUN addgroup -S app && adduser -S app -G app && mkdir -p /usr/src/app/data && chown -R app:app /usr/src/app
 USER app
-VOLUME ["/usr/src/app/data"]
+# Sem instrução VOLUME aqui de propósito: um volume anônimo esconderia a falta do volume
+# do EasyPanel (e seria perdido no deploy). O servidor avisa no log se a pasta não estiver montada.
 
 # Expor porta e definir variável padrão (pode ser sobrescrita em runtime)
 ENV PORT=3000
