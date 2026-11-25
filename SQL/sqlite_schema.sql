@@ -139,6 +139,121 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_user_id);
 CREATE INDEX IF NOT EXISTS idx_democracy_events_date ON democracy_events(event_date);
 CREATE INDEX IF NOT EXISTS idx_dep_event ON democracy_event_participants(event_id);
 
+-- ==========================================
+-- MINISTÉRIOS, DIÁRIO OFICIAL E ASSISTENTES (IA)
+-- ==========================================
+-- Os 6 ministérios existem no app; 4 deles têm um "Assistente" movido a IA (OpenRouter)
+-- que publica no Diário Oficial e envia sugestões para aprovação.
+
+CREATE TABLE IF NOT EXISTS ministries (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    mission TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    has_assistant INTEGER NOT NULL DEFAULT 0,
+    assistant_name TEXT,
+    assistant_persona TEXT,
+    assistant_context TEXT,
+    assistant_enabled INTEGER NOT NULL DEFAULT 1,
+    posts_per_day INTEGER NOT NULL DEFAULT 3 CHECK (posts_per_day BETWEEN 0 AND 12),
+    suggestions_per_day INTEGER NOT NULL DEFAULT 1 CHECK (suggestions_per_day BETWEEN 0 AND 6)
+);
+
+CREATE TABLE IF NOT EXISTS feed_posts (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+    ministry_code TEXT NOT NULL REFERENCES ministries(code),
+    kind TEXT NOT NULL CHECK (kind IN ('post', 'suggestion')),
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('published', 'draft', 'rejected')),
+    pinned INTEGER NOT NULL DEFAULT 0,
+    ai_model TEXT,
+    reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    reviewed_at TEXT,
+    published_at TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS feed_reactions (
+    post_id TEXT NOT NULL REFERENCES feed_posts(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (post_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS feed_comments (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+    post_id TEXT NOT NULL REFERENCES feed_posts(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- Agenda diária dos assistentes: horários sorteados, executados pelo agendador do servidor
+CREATE TABLE IF NOT EXISTS assistant_runs (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+    ministry_code TEXT NOT NULL REFERENCES ministries(code) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('post', 'suggestion')),
+    day TEXT NOT NULL,
+    scheduled_for TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'done', 'failed', 'skipped')),
+    error TEXT,
+    post_id TEXT REFERENCES feed_posts(id) ON DELETE SET NULL,
+    ran_at TEXT
+);
+
+-- Tarefas que o admin passa para um assistente: usadas na próxima rodada dele
+CREATE TABLE IF NOT EXISTS assistant_tasks (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+    ministry_code TEXT NOT NULL REFERENCES ministries(code) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'any' CHECK (kind IN ('any', 'post', 'suggestion')),
+    instructions TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'cancelled')),
+    post_id TEXT REFERENCES feed_posts(id) ON DELETE SET NULL,
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    done_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_tasks_open ON assistant_tasks(ministry_code, status, created_at);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_feed_posts_status ON feed_posts(status, published_at);
+CREATE INDEX IF NOT EXISTS idx_feed_comments_post ON feed_comments(post_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_assistant_runs_due ON assistant_runs(status, scheduled_for);
+CREATE INDEX IF NOT EXISTS idx_assistant_runs_day ON assistant_runs(day, ministry_code);
+
+-- Ministérios: inseridos também em bancos já existentes (INSERT OR IGNORE não altera o que o admin mudou)
+INSERT OR IGNORE INTO ministries (code, name, mission, sort_order, has_assistant, assistant_name, assistant_persona) VALUES
+('verdade', 'Ministério da Verdade',
+ 'Comunicação oficial do Estado, Diário Oficial, transparência das informações e supervisão administrativa do ILC.', 1, 1,
+ 'Assistente do Ministério da Verdade',
+ 'Porta-voz oficial, solene e preciso. Escreve comunicados, notas oficiais e boletins do Diário Oficial. Valoriza a informação verificada, a ordem e a confiança no Estado.'),
+('prosperidade', 'Ministério da Prosperidade',
+ 'Economia, trabalho, produção e recompensas cívicas. Administra os pontos, benefícios e incentivos da carteira do cidadão.', 2, 1,
+ 'Assistente do Ministério da Prosperidade',
+ 'Gestor otimista e pragmático. Fala de produção, trabalho, metas, benefícios e conquistas econômicas, sempre com números redondos e tom motivador.'),
+('defesa', 'Ministério da Defesa',
+ 'Segurança nacional, ordem pública, disciplina e aplicação das penalidades cívicas.', 3, 1,
+ 'Assistente do Ministério da Defesa',
+ 'Oficial disciplinado e direto. Escreve avisos de segurança, ordens do dia e alertas de conduta, com linguagem militar, firme e respeitosa.'),
+('educacao', 'Ministério da Educação',
+ 'Formação cívica, exames, quizzes e programas de conhecimento sobre a Constituição e os deveres do cidadão.', 4, 1,
+ 'Assistente do Ministério da Educação',
+ 'Professor cívico paciente e entusiasmado. Escreve curiosidades sobre a Constituição, convites para exames e desafios de conhecimento.'),
+('saude', 'Ministério da Saúde',
+ 'Políticas nacionais de saúde, campanhas de vacinação e bem-estar da população.', 5, 0, NULL, NULL),
+('ciencia', 'Ministério da Ciência e Tecnologia',
+ 'Pesquisa, inovação e infraestrutura tecnológica do Estado.', 6, 0, NULL, NULL);
+
+-- Recompensa por participar do Diário Oficial (primeiro comentário do dia)
+INSERT OR IGNORE INTO score_event_types (code, name, category, points_delta, requires_approval) VALUES
+('participacao_diario', 'Participação no Diário Oficial', 'reward', 10, 0);
+
 -- @@SEEDS@@
 -- ==========================================
 -- SEMENTES (aplicadas só em banco novo: PRAGMA user_version = 0)

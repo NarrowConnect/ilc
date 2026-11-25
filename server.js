@@ -1,4 +1,5 @@
 const express = require('express');
+const { createMinisterios } = require('./ministerios');
 const { pool, initSchema, snapshotTo, scheduleBackups, DB_PATH, verifyBackupFile, getBackupStatus, isDataDirMounted, RESTORE_PATH } = require('./db');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -2501,6 +2502,9 @@ app.get('/api/backup/offsite', async (req, res) => {
 });
 
 // Servir frontend SPA para qualquer outra rota (HTML5 History API)
+// Ministérios, Diário Oficial e assistentes de IA (ver ministerios.js)
+const ministerios = createMinisterios({ app, pool, authenticateToken, requireRole, applyScoreChange });
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
@@ -2517,4 +2521,5 @@ server.listen(PORT, () => {
   } else {
     console.log(`👑 Donos do sistema configurados: ${OWNER_EMAILS.length}`);
   }
+  ministerios.startScheduler().catch((err) => console.error('❌ Falha ao iniciar os assistentes:', err.message));
 });

@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import CountUp from './components/CountUp.jsx';
 import { Browser } from '@capacitor/browser';
 import ScoreChart from './components/ScoreChart';
 import CertificatesGrid from './components/CertificatesGrid';
+import DiarioOficial from './components/DiarioOficial.jsx';
+import AssistentesControle from './components/AssistentesControle.jsx';
+import { BANCO_CENTRAL_EMBLEM, INTELIGENCIA_EMBLEM } from './components/ministerios';
 import logoNorml from './imgs/lgo_norml.webp';
 import logoQuebrada from './imgs/lgo_quebrada.webp';
 import logoReluzindo from './imgs/lgo_reluzindo.webp';
@@ -338,6 +341,22 @@ function App() {
     }
   };
 
+  // Chamada autenticada à API: devolve o JSON ou lança erro com a mensagem do servidor
+  const api = useCallback(async (path, { method = 'GET', body } = {}) => {
+    const res = await fetchWithTimeout(`${API_BASE}${path}`, {
+      method,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {})
+    }, 120000);
+    const data = await parseApiResponse(res);
+    if (!res.ok || (data && data.error)) throw new Error((data && data.error) || `Erro ${res.status}`);
+    return data;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
   // FORMATADORES COMPREENSÍVEIS DE AUDITORIA
   const formatAuditDate = (dateStr) => {
     if (!dateStr) return '—';
@@ -472,11 +491,8 @@ function App() {
   // Inicializar Aba padrão conforme Nível de Acesso Base
   useEffect(() => {
     if (token && userRole) {
-      if (userRole === 'admin') {
-        setActiveTab('adm-dashboard');
-      } else {
-        setActiveTab('cit-dashboard');
-      }
+      // O Diário Oficial é a primeira tela depois do login
+      setActiveTab('diario');
     }
   }, [token, userRole]);
 
@@ -1857,12 +1873,15 @@ function App() {
 
   const navItems = userRole !== 'admin'
     ? [
+        { key: 'diario', icon: '📰', label: 'DIÁRIO OFICIAL', active: activeTab === 'diario', go: () => setActiveTab('diario') },
         { key: 'cit-dashboard', icon: '🪪', label: 'MINHA CARTEIRA', active: activeTab === 'cit-dashboard', go: () => setActiveTab('cit-dashboard') },
         { key: 'cit-audit', icon: '📜', label: 'LOGS DE AUDITORIA', active: activeTab === 'cit-audit', go: () => setActiveTab('cit-audit') },
         { key: 'democracy-events', icon: '🗳️', label: 'EVENTOS DA DEMOCRACIA', active: activeTab === 'democracy-events', go: () => setActiveTab('democracy-events') },
         { key: 'civic-vision', icon: '👁️', label: 'VISÃO CÍVICA', active: activeTab === 'civic-vision', go: () => setActiveTab('civic-vision') },
       ]
     : [
+        { key: 'diario', icon: '📰', label: 'DIÁRIO OFICIAL', active: activeTab === 'diario' && detailCitizenId === null, go: () => { setDetailCitizenId(null); setActiveTab('diario'); } },
+        { key: 'adm-assistentes', icon: '🤖', label: 'ASSISTENTES', active: activeTab === 'adm-assistentes', go: () => { setDetailCitizenId(null); setActiveTab('adm-assistentes'); } },
         { key: 'adm-dashboard', icon: '🏛️', label: 'PAINEL ADMINISTRATIVO', active: activeTab === 'adm-dashboard' && detailCitizenId === null, go: () => { setDetailCitizenId(null); setActiveTab('adm-dashboard'); } },
         { key: 'adm-citizens', icon: '👥', label: 'GESTÃO DE USUÁRIOS', active: activeTab === 'adm-citizens' || detailCitizenId !== null, go: () => { setDetailCitizenId(null); setActiveTab('adm-citizens'); } },
         { key: 'adm-approvals', icon: '✅', label: 'APROVAÇÕES PENDENTES', active: activeTab === 'adm-approvals', go: () => { setDetailCitizenId(null); setActiveTab('adm-approvals'); } },
@@ -2077,6 +2096,7 @@ function App() {
                       <span className="score-label">PONTUAÇÃO ILC ATUAL</span>
                       <CountUp className="score-number font-hero success-glow" value={citizenData.profile.current_score} />
                     </div>
+                    <img className="bcd-seal" src={BANCO_CENTRAL_EMBLEM} alt="Selo do Banco Central Democrata" title="Pontuação emitida pelo Banco Central Democrata" />
                     <div className="card-barcode" aria-hidden="true"></div>
                   </div>
                 </div>
@@ -2197,7 +2217,7 @@ function App() {
         {activeTab === 'cit-audit' && (
           <section className="tab-pane active">
             <div className="section-heading" style={{ marginBottom: '20px' }}>
-              <h2 className="section-title">MEUS LOGS DE AUDITORIA</h2>
+              <h2 className="section-title"><img className="sie-seal" src={INTELIGENCIA_EMBLEM} alt="" />MEUS LOGS DE AUDITORIA</h2>
               <p className="section-subtitle">Registro transparente e imutável de todas as ações associadas à sua conta.</p>
             </div>
             <div className="table-container">
@@ -2805,7 +2825,7 @@ function App() {
         {activeTab === 'adm-audit' && userRole === 'admin' && (
           <section className="tab-pane active">
             <div className="section-heading" style={{ marginBottom: '20px' }}>
-              <h2 className="section-title">AUDITORIA DOS REGISTROS ESTATAIS</h2>
+              <h2 className="section-title"><img className="sie-seal" src={INTELIGENCIA_EMBLEM} alt="" />AUDITORIA DOS REGISTROS ESTATAIS</h2>
               <p className="section-subtitle">Logs imutáveis e legíveis de todas as ações administrativas e alterações de usuários.</p>
             </div>
             <div className="table-container">
@@ -3002,6 +3022,14 @@ function App() {
         {/* ========================================== */}
         {/* VISÃO CÍVICA */}
         {/* ========================================== */}
+        {activeTab === 'diario' && detailCitizenId === null && (
+          <DiarioOficial api={api} showToast={showToast} isAdmin={userRole === 'admin'} />
+        )}
+
+        {activeTab === 'adm-assistentes' && userRole === 'admin' && (
+          <AssistentesControle api={api} showToast={showToast} />
+        )}
+
         {activeTab === 'civic-vision' && (
           <section className="tab-pane active">
             <div className="section-heading" style={{ marginBottom: '24px' }}>
