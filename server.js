@@ -2069,6 +2069,33 @@ app.get('/api/civic-overview', authenticateToken, async (req, res) => {
 });
 
 // Rota de Teste/Fallback da API
+// Atualização do APK: o app Android consulta esta rota ao abrir e, se houver versão maior,
+// oferece baixar e instalar ali mesmo. Para lançar: gerar o APK e atualizar releases/android/.
+const ANDROID_RELEASE_DIR = path.join(__dirname, 'releases', 'android');
+app.get('/api/app/android-version', (req, res) => {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(ANDROID_RELEASE_DIR, 'version.json'), 'utf8'));
+    const apkExists = fs.existsSync(path.join(ANDROID_RELEASE_DIR, 'ILC-Cidadao.apk'));
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      versionCode: Number(info.versionCode) || 0,
+      versionName: info.versionName || '',
+      notes: info.notes || '',
+      mandatory: Boolean(info.mandatory),
+      url: apkExists ? `/downloads/ILC-Cidadao.apk?v=${info.versionCode}` : null,
+    });
+  } catch (err) {
+    res.json({ versionCode: 0, versionName: '', notes: '', mandatory: false, url: null });
+  }
+});
+app.get('/downloads/ILC-Cidadao.apk', (req, res) => {
+  const file = path.join(ANDROID_RELEASE_DIR, 'ILC-Cidadao.apk');
+  if (!fs.existsSync(file)) return res.status(404).send('APK ainda não publicado.');
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/vnd.android.package-archive');
+  res.download(file, 'ILC-Cidadao.apk');
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'healthy', system: 'ILC Portal' });
 });

@@ -1,6 +1,6 @@
 {
   "name": "login-do-cidadao-ilc",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Sistema de Dashboard - Índice de Lealdade Cívica (ILC) com Express e banco SQLite embutido",
   "main": "server.js",
   "scripts": {

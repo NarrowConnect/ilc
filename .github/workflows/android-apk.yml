@@ -1,0 +1,134 @@
+# Gera o APK do ILC Cidadão e publica para a atualização dentro do app.
+#
+# Para lançar uma nova versão: suba "version" no package.json (ex.: 1.1.0 -> 1.2.0) e faça push na main.
+# O workflow compila, assina, coloca o APK em releases/android/ e faz commit. O deploy do servidor
+# passa a servir /downloads/ILC-Cidadao.apk e o app avisa os usuários ao abrir.
+#
+# Assinatura: secrets do repositório (Settings -> Secrets and variables -> Actions):
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# Sem esses secrets o APK sai sem assinatura, apenas como artifact da execução.
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: false
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versão do package.json
+        id: ver
+        run: |
+          NAME=$(node -p "require('./package.json').version")
+          CODE=$(node -p "const [a,b,c]=require('./package.json').version.split('.').map(Number); a*10000+b*100+c")
+          PUBLISHED=$(node -p "try{require('./releases/android/version.json').versionCode}catch(e){0}")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" -le "$PUBLISHED" ] && [ -f releases/android/ILC-Cidadao.apk ] && [ "${{ github.event_name }}" = "push" ]; then
+            echo "Versão $NAME ($CODE) já publicada. Nada a fazer."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.ver.outputs.skip != 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        if: steps.ver.outputs.skip != 'true'
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Instalar dependências
+        if: steps.ver.outputs.skip != 'true'
+        run: npm ci --legacy-peer-deps
+
+      - name: Build web + sync Android
+        if: steps.ver.outputs.skip != 'true'
+        run: npm run build:android
+
+      - name: Chave de assinatura
+        id: sign
+        if: steps.ver.outputs.skip != 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ilc-release.jks"
+            echo "file=$RUNNER_TEMP/ilc-release.jks" >> "$GITHUB_OUTPUT"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Secrets de assinatura ausentes: o APK sai sem assinatura e não é publicado."
+          fi
+
+      - name: Compilar APK
+        if: steps.ver.outputs.skip != 'true'
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ steps.sign.outputs.file }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          ls -la app/build/outputs/apk/release/
+
+      - name: Separar APK
+        if: steps.ver.outputs.skip != 'true'
+        run: |
+          mkdir -p out
+          if [ "${{ steps.sign.outputs.signed }}" = "true" ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk out/ILC-Cidadao.apk
+          else
+            cp android/app/build/outputs/apk/release/app-release-unsigned.apk out/ILC-Cidadao-unsigned.apk
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: steps.ver.outputs.skip != 'true'
+        with:
+          name: ILC-Cidadao-apk-${{ steps.ver.outputs.name }}
+          path: out/
+          retention-days: 30
+
+      - name: Publicar APK sem assinatura no branch apk-build (para assinar fora do CI)
+        if: steps.ver.outputs.skip != 'true' && steps.sign.outputs.signed != 'true'
+        run: |
+          cd out
+          git init -q -b apk-build
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add . && git commit -q -m "APK sem assinatura ${{ steps.ver.outputs.name }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" apk-build
+
+      - name: Publicar APK assinado em releases/android
+        if: steps.ver.outputs.skip != 'true' && steps.sign.outputs.signed == 'true'
+        run: |
+          mkdir -p releases/android
+          cp out/ILC-Cidadao.apk releases/android/ILC-Cidadao.apk
+          node -e "
+            const fs=require('fs'); const p='releases/android/version.json';
+            let v={}; try{v=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){}
+            v.versionCode=${{ steps.ver.outputs.code }}; v.versionName='${{ steps.ver.outputs.name }}';
+            fs.writeFileSync(p, JSON.stringify(v,null,2)+'\n');"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add releases/android
+          git commit -m "APK ${{ steps.ver.outputs.name }} publicado [skip ci]" || exit 0
+          git push

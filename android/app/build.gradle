@@ -6,6 +6,20 @@ def keystoreProperties = new Properties()
 if (keystorePropertiesFile.exists()) {
     keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
 }
+// No GitHub Actions a assinatura vem de variáveis de ambiente (secrets), ver .github/workflows/android-apk.yml
+if (System.getenv('ANDROID_KEYSTORE_FILE')) {
+    keystoreProperties['storeFile'] = System.getenv('ANDROID_KEYSTORE_FILE')
+    keystoreProperties['storePassword'] = System.getenv('ANDROID_KEYSTORE_PASSWORD')
+    keystoreProperties['keyAlias'] = System.getenv('ANDROID_KEY_ALIAS')
+    keystoreProperties['keyPassword'] = System.getenv('ANDROID_KEY_PASSWORD')
+}
+def hasSigning = keystoreProperties['storeFile'] != null
+
+// Versão do app vem do package.json: "1.2.3" -> versionName 1.2.3, versionCode 10203.
+// Para lançar uma atualização basta subir a versão no package.json.
+def appVersionName = new groovy.json.JsonSlurper().parse(rootProject.file('../package.json')).version
+def appVersionParts = appVersionName.tokenize('.').collect { it.toInteger() }
+def appVersionCode = appVersionParts[0] * 10000 + appVersionParts[1] * 100 + appVersionParts[2]
 
 android {
     namespace = "com.ilc.cidadao"
@@ -14,8 +28,8 @@ android {
         applicationId "com.ilc.cidadao"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCode
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -25,7 +39,7 @@ android {
     }
     signingConfigs {
         release {
-            if (keystorePropertiesFile.exists()) {
+            if (hasSigning) {
                 storeFile rootProject.file(keystoreProperties['storeFile'])
                 storePassword keystoreProperties['storePassword']
                 keyAlias keystoreProperties['keyAlias']
@@ -35,7 +49,7 @@ android {
     }
     buildTypes {
         release {
-            if (keystorePropertiesFile.exists()) {
+            if (hasSigning) {
                 signingConfig signingConfigs.release
             }
             minifyEnabled false

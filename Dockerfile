@@ -41,6 +41,8 @@ COPY --from=builder /usr/src/app/server.js ./server.js
 COPY --from=builder /usr/src/app/db.js ./db.js
 COPY --from=builder /usr/src/app/SQL ./SQL
 COPY --from=builder /usr/src/app/scripts ./scripts
+# APK publicado para a atualização dentro do app (rota /downloads/ILC-Cidadao.apk)
+COPY --from=builder /usr/src/app/releases ./releases
 
 # Banco SQLite embutido: monte um VOLUME do EasyPanel em /usr/src/app/data
 # para que o arquivo ilc.db (e os backups diários) sobrevivam a novos deploys.
