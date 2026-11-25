@@ -3029,7 +3029,13 @@ function App() {
         {/* VISÃO CÍVICA */}
         {/* ========================================== */}
         {activeTab === 'diario' && detailCitizenId === null && (
-          <DiarioOficial api={api} showToast={showToast} isAdmin={userRole === 'admin'} />
+          <DiarioOficial
+            api={api}
+            showToast={showToast}
+            isAdmin={userRole === 'admin'}
+            me={{ username, avatar: activeAvatar }}
+            apiOrigin={API_BASE.replace(/\/api$/, '')}
+          />
         )}
 
         {activeTab === 'adm-assistentes' && userRole === 'admin' && (

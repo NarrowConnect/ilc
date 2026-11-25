@@ -81,13 +81,16 @@ function Comments({ post, api, showToast, isAdmin, onCountChange }) {
   );
 }
 
-function PostCard({ post, api, showToast, isAdmin, onChange, onRemove }) {
+function PostCard({ post, api, showToast, isAdmin, onChange, onRemove, apiOrigin }) {
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [menu, setMenu] = useState(false);
   const [busy, setBusy] = useState(false);
+  const isCitizen = post.author_type === 'citizen';
   const emblem = MINISTRY_EMBLEMS[post.ministry_code];
   const long = post.body.length > 420;
+  const canDelete = isAdmin || post.mine;
+  const [avatarFailed, setAvatarFailed] = useState(false);
 
   const support = async () => {
     if (busy) return;
@@ -120,7 +123,7 @@ function PostCard({ post, api, showToast, isAdmin, onChange, onRemove }) {
     setMenu(false);
     if (!window.confirm('Apagar esta publicação do Diário Oficial?')) return;
     try {
-      await api(`/admin/feed/${post.id}`, { method: 'DELETE' });
+      await api(`/feed/${post.id}`, { method: 'DELETE' });
       onRemove(post.id);
       showToast('Diário Oficial', 'Publicação apagada.', 'success');
     } catch (err) {
@@ -131,19 +134,38 @@ function PostCard({ post, api, showToast, isAdmin, onChange, onRemove }) {
   return (
     <article className={`feed-card ${post.pinned ? 'pinned' : ''}`}>
       <header className="feed-card-head">
-        <img className="feed-emblem" src={emblem} alt="" />
+        {isCitizen ? (
+          post.author_avatar && !avatarFailed ? (
+            <img className="feed-emblem citizen" src={post.author_avatar} alt="" onError={() => setAvatarFailed(true)} />
+          ) : (
+            <span className="feed-emblem citizen feed-initial" aria-hidden="true">{post.author.charAt(0).toUpperCase()}</span>
+          )
+        ) : (
+          <img className="feed-emblem" src={emblem} alt="" />
+        )}
         <div className="feed-author">
-          <span className="feed-ministry">{post.ministry_name}</span>
-          <span className="feed-byline">
-            {post.author} · <span className="feed-auto-tag" title="Publicação gerada pelo assistente automatizado do ministério">assistente automatizado</span> · {formatRelative(post.published_at)}
-          </span>
+          {isCitizen ? (
+            <>
+              <span className="feed-ministry citizen">@{post.author}</span>
+              <span className="feed-byline">
+                {post.author_title ? `${post.author_title} · ` : ''}{formatRelative(post.published_at)}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="feed-ministry">{post.ministry_name}</span>
+              <span className="feed-byline">
+                {post.author} · <span className="feed-auto-tag" title="Publicação gerada pelo assistente automatizado do ministério">assistente automatizado</span> · {formatRelative(post.published_at)}
+              </span>
+            </>
+          )}
         </div>
-        {isAdmin && (
+        {canDelete && (
           <div className="feed-menu-wrap">
             <button type="button" className="feed-menu-btn" aria-label="Opções" onClick={() => setMenu((m) => !m)}><Icon name="more" size={20} /></button>
             {menu && (
               <div className="feed-menu">
-                <button type="button" onClick={pin}>{post.pinned ? 'Desafixar' : 'Fixar no topo'}</button>
+                {isAdmin && <button type="button" onClick={pin}>{post.pinned ? 'Desafixar' : 'Fixar no topo'}</button>}
                 <button type="button" className="danger" onClick={remove}>Apagar</button>
               </div>
             )}
@@ -158,8 +180,13 @@ function PostCard({ post, api, showToast, isAdmin, onChange, onRemove }) {
         </div>
       )}
 
-      <h3 className="feed-title">{post.title}</h3>
-      <p className={`feed-body ${long && !expanded ? 'clamped' : ''}`}>{post.body}</p>
+      {post.image_url && (
+        <div className="feed-photo">
+          <img src={`${apiOrigin}${post.image_url}`} alt={isCitizen ? `Foto publicada por @${post.author}` : ''} loading="lazy" />
+        </div>
+      )}
+      {post.title && <h3 className="feed-title">{post.title}</h3>}
+      {post.body && <p className={`feed-body ${long && !expanded ? 'clamped' : ''}`}>{post.body}</p>}
       {long && (
         <button type="button" className="feed-link-btn" onClick={() => setExpanded((v) => !v)}>
           {expanded ? 'mostrar menos' : 'ler mais'}
@@ -192,7 +219,126 @@ function PostCard({ post, api, showToast, isAdmin, onChange, onRemove }) {
   );
 }
 
-export default function DiarioOficial({ api, showToast, isAdmin }) {
+
+// Reduz a foto no aparelho antes de enviar: lado maior até 1280px, JPEG 0,78 (uma foto de
+// celular de 4 MB costuma virar 150 a 300 KB). Fica no volume de dados do servidor.
+const PHOTO_MAX_SIDE = 1280;
+const PHOTO_QUALITY = 0.78;
+function shrinkImage(file) {
+  return new Promise((resolve, reject) => {
+    if (!/^image\/(jpeg|png|webp|heic|heif)$/i.test(file.type) && !/\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)) {
+      reject(new Error('Escolha uma foto (JPG, PNG ou WEBP).'));
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const max = PHOTO_MAX_SIDE;
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      // Fundo escuro para PNG transparente não virar preto/branco aleatório no JPEG
+      ctx.fillStyle = '#0B1629';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', PHOTO_QUALITY));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Não foi possível ler esta foto.')); };
+    img.src = url;
+  });
+}
+
+function Composer({ api, showToast, me, onPosted }) {
+  const [text, setText] = useState('');
+  const [image, setImage] = useState(null);
+  const [sending, setSending] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const cameraRef = useRef(null);
+  const galleryRef = useRef(null);
+  const [avatarFailed, setAvatarFailed] = useState(false);
+
+  const pick = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      setImage(await shrinkImage(file));
+    } catch (err) {
+      showToast('Foto', err.message, 'warning');
+    }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (sending || (!text.trim() && !image)) return;
+    setSending(true);
+    try {
+      const data = await api('/feed', { method: 'POST', body: { body: text.trim(), ...(image ? { image } : {}) } });
+      setText('');
+      setImage(null);
+      setFocused(false);
+      onPosted(data.post);
+      showToast('Publicado', 'Sua publicação está no Diário Oficial.', 'success');
+    } catch (err) {
+      showToast('Não foi possível publicar', err.message, 'warning');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const expanded = focused || text || image;
+
+  return (
+    <form className={`feed-composer ${expanded ? 'open' : ''}`} onSubmit={submit}>
+      <div className="feed-composer-row">
+        {me.avatar && !avatarFailed ? (
+          <img className="feed-emblem citizen" src={me.avatar} alt="" onError={() => setAvatarFailed(true)} />
+        ) : (
+          <span className="feed-emblem citizen feed-initial" aria-hidden="true">{(me.username || 'U').charAt(0).toUpperCase()}</span>
+        )}
+        <textarea
+          rows={expanded ? 3 : 1}
+          maxLength={2200}
+          placeholder="Escreva uma publicação..."
+          value={text}
+          onFocus={() => setFocused(true)}
+          onChange={(e) => setText(e.target.value)}
+          aria-label="Escrever publicação"
+        />
+      </div>
+      {image && (
+        <div className="feed-composer-preview">
+          <img src={image} alt="Prévia da foto" />
+          <button type="button" className="feed-composer-remove" onClick={() => setImage(null)} aria-label="Remover foto">
+            <Icon name="x" size={20} />
+          </button>
+        </div>
+      )}
+      {expanded && (
+        <div className="feed-composer-actions">
+          {/* capture abre a câmera direto; sem capture abre a galeria */}
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={pick} />
+          <input ref={galleryRef} type="file" accept="image/*" hidden onChange={pick} />
+          <button type="button" className="feed-composer-photo" onClick={() => cameraRef.current && cameraRef.current.click()}>
+            <Icon name="camera" size={18} /> Câmera
+          </button>
+          <button type="button" className="feed-composer-photo" onClick={() => galleryRef.current && galleryRef.current.click()}>
+            <Icon name="image" size={18} /> Galeria
+          </button>
+          <span className="feed-composer-count">{text.length > 1800 ? `${text.length}/2200` : ''}</span>
+          <button type="submit" className="state-btn primary feed-composer-send" disabled={sending || (!text.trim() && !image)}>
+            {sending ? 'Publicando...' : 'Publicar'}
+          </button>
+        </div>
+      )}
+    </form>
+  );
+}
+
+export default function DiarioOficial({ api, showToast, isAdmin, me = {}, apiOrigin = '' }) {
   const [posts, setPosts] = useState([]);
   const [nextBefore, setNextBefore] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -266,11 +412,12 @@ export default function DiarioOficial({ api, showToast, isAdmin }) {
       <div className="diario-head">
         <div>
           <h2 className="section-title">DIÁRIO OFICIAL</h2>
-          <p className="section-subtitle">Comunicados dos ministérios da Democracia Gerenciada. Apoie e comente para somar participação cívica.</p>
+          <p className="section-subtitle">Comunicados dos ministérios e publicações dos cidadãos. Publique, apoie e comente.</p>
         </div>
         <div className="diario-tools">
           <select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filtrar por ministério">
-            <option value="">Todos os ministérios</option>
+            <option value="">Tudo</option>
+            <option value="cidadaos">Publicações dos cidadãos</option>
             {ministries.map((m) => <option key={m.code} value={m.code}>{m.name}</option>)}
           </select>
           <button type="button" className="feed-refresh" onClick={() => load(true)} disabled={loading} aria-label="Atualizar"><Icon name="refresh" size={18} className={loading ? 'ilc-spin-slow' : ''} /></button>
@@ -278,14 +425,27 @@ export default function DiarioOficial({ api, showToast, isAdmin }) {
       </div>
 
       <div className="feed-list">
+        <Composer
+          api={api}
+          showToast={showToast}
+          me={me}
+          onPosted={(p) => {
+            if (filter && filter !== 'cidadaos') return;
+            setPosts((prev) => {
+              const firstUnpinned = prev.findIndex((x) => !x.pinned);
+              const at = firstUnpinned === -1 ? prev.length : firstUnpinned;
+              return [...prev.slice(0, at), p, ...prev.slice(at)];
+            });
+          }}
+        />
         {posts.map((p) => (
-          <PostCard key={p.id} post={p} api={api} showToast={showToast} isAdmin={isAdmin} onChange={update} onRemove={removePost} />
+          <PostCard key={p.id} post={p} api={api} showToast={showToast} isAdmin={isAdmin} onChange={update} onRemove={removePost} apiOrigin={apiOrigin} />
         ))}
 
         {!loading && !error && posts.length === 0 && (
           <div className="feed-empty">
             <p>Nenhuma publicação ainda.</p>
-            <p className="feed-muted">Os assistentes dos ministérios publicam ao longo do dia, entre 7h e 22h.</p>
+            <p className="feed-muted">Seja o primeiro a publicar. Os assistentes dos ministérios também publicam ao longo do dia, entre 7h e 22h.</p>
           </div>
         )}
 

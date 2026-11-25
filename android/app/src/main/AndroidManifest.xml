@@ -48,4 +48,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Atualização do app por dentro dele (baixa o APK novo e abre o instalador) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Android 11+: sem isto o app não enxerga o app de câmera e o botão "Câmera" do Diário Oficial abre só a galeria -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
 </manifest>

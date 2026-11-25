@@ -175,12 +175,18 @@ CREATE TABLE IF NOT EXISTS assistants (
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- kind: post/suggestion = assistentes; citizen = publicação de um usuário (user_id, sem ministério)
+-- Bancos antigos são reconstruídos com esta definição por ministerios.js (rebuildFeedPostsIfNeeded).
 CREATE TABLE IF NOT EXISTS feed_posts (
     id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
-    ministry_code TEXT NOT NULL REFERENCES ministries(code),
-    kind TEXT NOT NULL CHECK (kind IN ('post', 'suggestion')),
-    title TEXT NOT NULL,
-    body TEXT NOT NULL,
+    ministry_code TEXT REFERENCES ministries(code),
+    assistant_id TEXT REFERENCES assistants(id) ON DELETE SET NULL,
+    author_name TEXT,
+    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('post', 'suggestion', 'citizen')),
+    title TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    image_path TEXT,
     status TEXT NOT NULL CHECK (status IN ('published', 'draft', 'rejected')),
     pinned INTEGER NOT NULL DEFAULT 0,
     ai_model TEXT,

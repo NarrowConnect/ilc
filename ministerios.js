@@ -15,6 +15,11 @@
 //                        outros são reserva do próprio OpenRouter. O painel admin pode trocar.
 //   ASSISTANTS_DISABLED  "true" desliga o agendador (ex.: em desenvolvimento)
 
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { DB_PATH } = require('./db');
+
 const OPENROUTER_URL = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions'; // trocar só em testes
 const DEFAULT_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
 const TIMEZONE = 'America/Sao_Paulo';
@@ -156,7 +161,44 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     return res.rows.length > 0;
   }
 
+  // Bancos de antes dos posts de cidadão: feed_posts tinha ministry_code obrigatório e kind só
+  // post/suggestion. SQLite não altera CHECK/NOT NULL, então a tabela é reconstruída com a
+  // definição atual do SQL/sqlite_schema.sql, mantendo os dados, apoios e comentários.
+  async function rebuildFeedPostsIfNeeded() {
+    const cur = await pool.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'feed_posts'");
+    if (!cur.rows.length || cur.rows[0].sql.includes("'citizen'")) return;
+    const schema = fs.readFileSync(path.join(__dirname, 'SQL', 'sqlite_schema.sql'), 'utf8');
+    const match = schema.match(/CREATE TABLE IF NOT EXISTS feed_posts \([\s\S]*?\n\);/);
+    if (!match) throw new Error('Definição de feed_posts não encontrada no schema.');
+    const ddl = match[0].replace('CREATE TABLE IF NOT EXISTS feed_posts', 'CREATE TABLE feed_posts_new');
+    const oldCols = (await pool.query("SELECT name FROM pragma_table_info('feed_posts')")).rows.map((r) => r.name);
+
+    // Com foreign_keys ligado, apagar a tabela antiga apagaria apoios e comentários em cascata
+    await pool.query('PRAGMA foreign_keys = OFF');
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(ddl);
+      const newCols = (await client.query("SELECT name FROM pragma_table_info('feed_posts_new')")).rows.map((r) => r.name);
+      const cols = oldCols.filter((c) => newCols.includes(c)).join(', ');
+      await client.query(`INSERT INTO feed_posts_new (${cols}) SELECT ${cols} FROM feed_posts`);
+      await client.query('DROP TABLE feed_posts');
+      await client.query('ALTER TABLE feed_posts_new RENAME TO feed_posts');
+      await client.query('CREATE INDEX IF NOT EXISTS idx_feed_posts_status ON feed_posts(status, published_at)');
+      await client.query('COMMIT');
+      console.log('🗞️  Diário Oficial preparado para publicações dos cidadãos.');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+      await pool.query('PRAGMA foreign_keys = ON');
+    }
+  }
+
   async function migrate() {
+    await rebuildFeedPostsIfNeeded();
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_feed_posts_user ON feed_posts(user_id)');
     const add = async (table, column, ddl) => {
       if (!(await columnExists(table, column))) await pool.query(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
     };
@@ -417,11 +459,16 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
   // ------------------------------------------
   // Rotas: ministérios e Diário Oficial
   // ------------------------------------------
-  const serializePost = (row) => ({
+  const serializePost = (row, viewerId) => ({
     id: row.id,
     ministry_code: row.ministry_code,
     ministry_name: row.ministry_name,
-    author: row.assistant_name || row.ministry_name,
+    author_type: row.kind === 'citizen' ? 'citizen' : 'assistant',
+    author: row.kind === 'citizen' ? (row.username || 'cidadão') : (row.assistant_name || row.ministry_name),
+    author_title: row.kind === 'citizen' ? (row.user_title || null) : null,
+    author_avatar: row.kind === 'citizen' ? (row.user_avatar || null) : null,
+    mine: row.kind === 'citizen' && !!viewerId && row.user_id === viewerId,
+    image_url: row.image_path ? `/api/feed-images/${row.image_path}` : null,
     kind: row.kind,
     title: row.title,
     body: row.body,
@@ -454,27 +501,127 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     try {
       const params = [req.user.id];
       let where = "fp.status = 'published'";
-      if (ministry) { params.push(ministry); where += ` AND fp.ministry_code = $${params.length}`; }
+      if (ministry === 'cidadaos') where += " AND fp.kind = 'citizen'";
+      else if (ministry) { params.push(ministry); where += ` AND fp.ministry_code = $${params.length}`; }
       if (before) { params.push(before); where += ` AND fp.published_at < $${params.length}`; }
       params.push(limit);
       // Fixados aparecem só no topo da primeira página
       const order = before ? 'fp.published_at DESC' : 'fp.pinned DESC, fp.published_at DESC';
       const result = await pool.query(
         `SELECT fp.*, m.name AS ministry_name, fp.author_name AS assistant_name,
+                u.username, u.avatar_url AS user_avatar, u.hierarchy_title AS user_title,
                 (SELECT COUNT(*) FROM feed_reactions r WHERE r.post_id = fp.id) AS support_count,
                 (SELECT COUNT(*) FROM feed_comments c WHERE c.post_id = fp.id) AS comment_count,
                 EXISTS (SELECT 1 FROM feed_reactions r WHERE r.post_id = fp.id AND r.user_id = $1) AS supported_by_me
-         FROM feed_posts fp JOIN ministries m ON m.code = fp.ministry_code
+         FROM feed_posts fp
+         LEFT JOIN ministries m ON m.code = fp.ministry_code
+         LEFT JOIN users u ON u.id = fp.user_id
          WHERE ${where} ${before ? 'AND fp.pinned = 0' : ''}
          ORDER BY ${order}
          LIMIT $${params.length}`,
         params
       );
-      const posts = result.rows.map(serializePost);
+      const posts = result.rows.map((r) => serializePost(r, req.user.id));
       const lastUnpinned = [...posts].reverse().find((p) => !p.pinned);
       res.json({ posts, next_before: posts.length === limit && lastUnpinned ? lastUnpinned.published_at : null });
     } catch (err) {
       res.status(500).json({ error: 'Erro ao carregar o Diário Oficial: ' + err.message });
+    }
+  });
+
+  // ------------------------------------------
+  // Publicações dos cidadãos (texto e foto), sem limite por dia
+  // ------------------------------------------
+  const IMAGE_DIR = path.join(path.dirname(DB_PATH), 'uploads', 'feed');
+  const IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+  const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+  const IMAGE_NAME = /^[0-9a-f-]{36}\.(jpg|png|webp)$/;
+  const POST_MAX = 2200;
+
+  // Confere a assinatura do arquivo, não só o que o navegador disse
+  function detectImageType(buf) {
+    if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+    if (buf.length > 8 && buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+    if (buf.length > 12 && buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+    return null;
+  }
+
+  function saveImage(dataUrl) {
+    const m = /^data:(image\/[a-z]+);base64,([A-Za-z0-9+/=\s]+)$/.exec(String(dataUrl || ''));
+    if (!m) throw Object.assign(new Error('Formato de imagem inválido.'), { status: 400 });
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > IMAGE_MAX_BYTES) throw Object.assign(new Error('A foto é grande demais (máximo 6 MB).'), { status: 400 });
+    const type = detectImageType(buf);
+    if (!type) throw Object.assign(new Error('Envie uma foto JPG, PNG ou WEBP.'), { status: 400 });
+    fs.mkdirSync(IMAGE_DIR, { recursive: true });
+    const name = `${crypto.randomUUID()}.${IMAGE_TYPES[type]}`;
+    fs.writeFileSync(path.join(IMAGE_DIR, name), buf);
+    return name;
+  }
+
+  // Tira do disco a foto de uma publicação apagada
+  function discardImage(name) {
+    if (!name || !IMAGE_NAME.test(name)) return;
+    fs.promises.rm(path.join(IMAGE_DIR, name), { force: true }).catch(() => {});
+  }
+
+  // Fotos servidas sem token (a tag <img> não manda cabeçalho); o nome é aleatório e não dá para listar
+  app.get('/api/feed-images/:file', (req, res) => {
+    const file = String(req.params.file);
+    if (!IMAGE_NAME.test(file)) return res.status(404).end();
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.sendFile(path.join(IMAGE_DIR, file), (err) => { if (err && !res.headersSent) res.status(404).end(); });
+  });
+
+  app.post('/api/feed', authenticateToken, async (req, res) => {
+    const body = String((req.body && req.body.body) || '').trim();
+    const image = req.body && req.body.image;
+    if (!body && !image) return res.status(400).json({ error: 'Escreva algo ou escolha uma foto.' });
+    if (body.length > POST_MAX) return res.status(400).json({ error: `A publicação pode ter no máximo ${POST_MAX} caracteres.` });
+    let imageName = null;
+    try {
+      if (image) imageName = saveImage(image);
+      const now = new Date().toISOString();
+      const ins = await pool.query(
+        `INSERT INTO feed_posts (user_id, kind, body, image_path, status, published_at)
+         VALUES ($1, 'citizen', $2, $3, 'published', $4) RETURNING id`,
+        [req.user.id, body, imageName, now]
+      );
+      const row = await pool.query(
+        `SELECT fp.*, NULL AS ministry_name, NULL AS assistant_name, u.username, u.avatar_url AS user_avatar, u.hierarchy_title AS user_title,
+                0 AS support_count, 0 AS comment_count, 0 AS supported_by_me
+         FROM feed_posts fp JOIN users u ON u.id = fp.user_id WHERE fp.id = $1`,
+        [ins.rows[0].id]
+      );
+      res.json({ success: true, post: serializePost(row.rows[0], req.user.id) });
+    } catch (err) {
+      discardImage(imageName);
+      res.status(err.status || 500).json({ error: err.status ? err.message : 'Erro ao publicar: ' + err.message });
+    }
+  });
+
+  // O autor apaga a própria publicação; o admin apaga qualquer uma
+  app.delete('/api/feed/:id', authenticateToken, async (req, res) => {
+    try {
+      const found = await pool.query('SELECT id, user_id, kind, ministry_code, title, body, image_path FROM feed_posts WHERE id = $1', [req.params.id]);
+      if (found.rows.length === 0) return res.status(404).json({ error: 'Publicação não encontrada.' });
+      const post = found.rows[0];
+      const isOwner = post.kind === 'citizen' && post.user_id === req.user.id;
+      // 400 e não 403: o app desloga em qualquer 403
+      if (!isOwner && req.user.role !== 'admin') return res.status(400).json({ error: 'Você só pode apagar as suas publicações.' });
+      await pool.query('UPDATE assistant_runs SET post_id = NULL WHERE post_id = $1', [post.id]);
+      await pool.query('UPDATE assistant_tasks SET post_id = NULL WHERE post_id = $1', [post.id]);
+      await pool.query('DELETE FROM feed_posts WHERE id = $1', [post.id]);
+      discardImage(post.image_path);
+      if (!isOwner) {
+        await audit(req.user.id, 'feed_posts', post.id, 'delete_post', { deleted: true }, {
+          kind: post.kind, user_id: post.user_id, ministry: post.ministry_code, title: post.title, body: String(post.body).slice(0, 500),
+        });
+      }
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Erro ao apagar publicação: ' + err.message });
     }
   });
 
@@ -594,10 +741,12 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
 
   app.delete('/api/admin/feed/:id', authenticateToken, requireRole(['admin']), async (req, res) => {
     try {
-      const found = await pool.query('SELECT id, ministry_code, kind, title, status FROM feed_posts WHERE id = $1', [req.params.id]);
+      const found = await pool.query('SELECT id, ministry_code, kind, title, status, user_id, image_path FROM feed_posts WHERE id = $1', [req.params.id]);
       if (found.rows.length === 0) return res.status(404).json({ error: 'Publicação não encontrada.' });
       await pool.query('UPDATE assistant_runs SET post_id = NULL WHERE post_id = $1', [req.params.id]);
+      await pool.query('UPDATE assistant_tasks SET post_id = NULL WHERE post_id = $1', [req.params.id]);
       await pool.query('DELETE FROM feed_posts WHERE id = $1', [req.params.id]);
+      discardImage(found.rows[0].image_path);
       await audit(req.user.id, 'feed_posts', req.params.id, 'delete_post', { deleted: true }, found.rows[0]);
       res.json({ success: true });
     } catch (err) {
