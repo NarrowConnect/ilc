@@ -74,7 +74,7 @@ const isNativeApp = Capacitor.isNativePlatform();
 const NATIVE_AUTH_SCHEME = 'com.ilc.cidadao';
 
 // Servidor usado pelo APK / app iOS (o site web usa caminho relativo /api)
-const PRODUCTION_SERVER_URL = 'https://ilc.designoh.cloud';
+const PRODUCTION_SERVER_URL = 'https://ilc.narrowconnect.com.br';
 
 const getApiBase = () => {
   const toApiBase = (url) => {

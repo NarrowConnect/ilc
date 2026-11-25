@@ -5,7 +5,7 @@ import { App as CapacitorApp } from '@capacitor/app';
 // Plugin nativo local (android/app/src/main/java/com/ilc/cidadao/AppUpdaterPlugin.java)
 const AppUpdater = registerPlugin('AppUpdater');
 
-const UPDATE_SERVER_URL = (import.meta.env.VITE_API_BASE_URL || 'https://ilc.designoh.cloud')
+const UPDATE_SERVER_URL = (import.meta.env.VITE_API_BASE_URL || 'https://ilc.narrowconnect.com.br')
   .replace(/\/$/, '')
   .replace(/\/api$/, '');
 
