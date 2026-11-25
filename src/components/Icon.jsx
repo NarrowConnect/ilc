@@ -5,7 +5,7 @@ import {
   FilePen, Award, Settings, Folder, UserPlus, Pencil, Lock, Image, Tag, Zap, CircleX, Trash2, Hand,
   Ban, Star, ArrowDown, Crown, Hourglass, TriangleAlert, RefreshCw, Camera, KeyRound, ArrowLeft,
   Search, Sparkles, Cog, Swords, Globe, Medal, Upload, Smartphone, ChevronDown, Newspaper, Bot,
-  MoreHorizontal, MessageSquare,
+  MoreHorizontal, MessageSquare, Gamepad2, Target, Timer, Brain, Trophy, WifiOff, Gavel,
 } from 'lucide-react';
 
 // Ícones outline (Lucide, licença ISC, gratuita) usados no app inteiro.
@@ -21,6 +21,7 @@ const ICONS = {
   key: KeyRound, back: ArrowLeft, search: Search, sparkles: Sparkles, cog: Cog, swords: Swords,
   globe: Globe, medal: Medal, upload: Upload, phone: Smartphone, chevron: ChevronDown,
   newspaper: Newspaper, bot: Bot, more: MoreHorizontal, comment: MessageSquare,
+  gamepad: Gamepad2, target: Target, timer: Timer, brain: Brain, trophy: Trophy, offline: WifiOff, gavel: Gavel,
 };
 
 export default function Icon({ name, size = 16, strokeWidth = 1.75, className = '', ...rest }) {

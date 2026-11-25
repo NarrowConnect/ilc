@@ -88,15 +88,15 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     return (fromDb || process.env.OPENROUTER_MODEL || DEFAULT_MODEL).trim();
   }
 
-  async function callOpenRouter(messages) {
+  async function callOpenRouter(messages, { maxTokens = 700, temperature = 0.9 } = {}) {
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) throw new Error('OPENROUTER_API_KEY não configurada no servidor.');
     const models = (await getModelSetting()).split(',').map((m) => m.trim()).filter(Boolean);
     const body = {
       model: models[0],
       messages,
-      temperature: 0.9,
-      max_tokens: 700,
+      temperature,
+      max_tokens: maxTokens,
     };
     if (models.length > 1) body.models = models;
 
@@ -1025,7 +1025,17 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     }
   });
 
-  return { startScheduler };
+  // Usado pelos jogos (jogos.js): mesma IA, auditoria e assistentes
+  return {
+    startScheduler,
+    ready,
+    audit,
+    callOpenRouter,
+    loadAssistant,
+    LORE,
+    localParts,
+    localTime,
+  };
 }
 
 module.exports = { createMinisterios };

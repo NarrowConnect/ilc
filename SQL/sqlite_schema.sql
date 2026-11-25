@@ -276,6 +276,89 @@ INSERT OR IGNORE INTO ministries (code, name, mission, sort_order, has_assistant
 INSERT OR IGNORE INTO score_event_types (code, name, category, points_delta, requires_approval) VALUES
 ('participacao_diario', 'Participação no Diário Oficial', 'reward', 10, 0);
 
+-- ==========================================
+-- JOGOS (jogos.js): missões diárias, quiz da Constituição, despacho de processos e memória
+-- Conteúdo escrito pelos assistentes entra como 'pending' e só vale depois que um admin aprova.
+-- ==========================================
+CREATE TABLE IF NOT EXISTS game_missions (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+    assistant_id TEXT REFERENCES assistants(id) ON DELETE SET NULL,
+    ministry_code TEXT REFERENCES ministries(code),
+    author_name TEXT,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL CHECK (action IN ('apoiar', 'comentar', 'publicar', 'quiz', 'despacho', 'memoria')),
+    target INTEGER NOT NULL DEFAULT 1,
+    points INTEGER NOT NULL DEFAULT 20,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    day TEXT,
+    reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS game_mission_claims (
+    mission_id TEXT NOT NULL REFERENCES game_missions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    points INTEGER NOT NULL,
+    claimed_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (mission_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS game_quiz_questions (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+    assistant_id TEXT REFERENCES assistants(id) ON DELETE SET NULL,
+    author_name TEXT,
+    question TEXT NOT NULL,
+    options TEXT NOT NULL,
+    correct_index INTEGER NOT NULL,
+    explanation TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS game_cases (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+    assistant_id TEXT REFERENCES assistants(id) ON DELETE SET NULL,
+    ministry_code TEXT REFERENCES ministries(code),
+    author_name TEXT,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    correct_decision TEXT NOT NULL CHECK (correct_decision IN ('deferir', 'indeferir')),
+    rationale TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- Cada resposta do quiz, processo despachado ou partida da memória (client_id evita contar duas vezes
+-- o que o celular reenviar ao sincronizar)
+CREATE TABLE IF NOT EXISTS game_plays (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    game TEXT NOT NULL CHECK (game IN ('quiz', 'despacho', 'memoria')),
+    ref_id TEXT,
+    client_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('served', 'done', 'expired')),
+    correct INTEGER,
+    points INTEGER NOT NULL DEFAULT 0,
+    data TEXT,
+    served_at TEXT,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (user_id, game, client_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_plays_user_day ON game_plays(user_id, day, game);
+CREATE INDEX IF NOT EXISTS idx_game_plays_ref ON game_plays(user_id, game, ref_id);
+CREATE INDEX IF NOT EXISTS idx_game_missions_day ON game_missions(status, day);
+
+INSERT OR IGNORE INTO score_event_types (code, name, category, points_delta, requires_approval) VALUES
+('jogo_missao', 'Missão diária cumprida', 'reward', 20, 0),
+('jogo_quiz', 'Quiz da Constituição', 'reward', 5, 0),
+('jogo_despacho', 'Despacho de processos', 'reward', 8, 0),
+('jogo_memoria', 'Memória dos emblemas', 'reward', 10, 0);
+
 -- @@SEEDS@@
 -- ==========================================
 -- SEMENTES (aplicadas só em banco novo: PRAGMA user_version = 0)

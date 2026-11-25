@@ -40,6 +40,7 @@ COPY --from=builder /usr/src/app/dist ./dist
 COPY --from=builder /usr/src/app/server.js ./server.js
 COPY --from=builder /usr/src/app/db.js ./db.js
 COPY --from=builder /usr/src/app/ministerios.js ./ministerios.js
+COPY --from=builder /usr/src/app/jogos.js ./jogos.js
 COPY --from=builder /usr/src/app/SQL ./SQL
 COPY --from=builder /usr/src/app/scripts ./scripts
 # APK publicado para a atualização dentro do app (rota /downloads/ILC-Cidadao.apk)

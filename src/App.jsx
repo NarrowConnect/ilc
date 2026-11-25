@@ -7,6 +7,8 @@ import { Browser } from '@capacitor/browser';
 import ScoreChart from './components/ScoreChart';
 import CertificatesGrid from './components/CertificatesGrid';
 import DiarioOficial from './components/DiarioOficial.jsx';
+import Jogos from './components/Jogos.jsx';
+import JogosRevisao from './components/JogosRevisao.jsx';
 import AssistentesControle, { NovoAssistenteForm } from './components/AssistentesControle.jsx';
 import { BANCO_CENTRAL_EMBLEM, INTELIGENCIA_EMBLEM } from './components/ministerios';
 import logoNorml from './imgs/lgo_norml.webp';
@@ -1866,6 +1868,7 @@ function App() {
   const navItems = userRole !== 'admin'
     ? [
         { key: 'diario', icon: <Icon name="newspaper" size={18} />, label: 'DIÁRIO OFICIAL', active: activeTab === 'diario', go: () => setActiveTab('diario') },
+        { key: 'jogos', icon: <Icon name="gamepad" size={18} />, label: 'JOGOS', active: activeTab === 'jogos', go: () => setActiveTab('jogos') },
         { key: 'cit-dashboard', icon: <Icon name="idcard" size={18} />, label: 'MINHA CARTEIRA', active: activeTab === 'cit-dashboard', go: () => setActiveTab('cit-dashboard') },
         { key: 'cit-audit', icon: <Icon name="scroll" size={18} />, label: 'LOGS DE AUDITORIA', active: activeTab === 'cit-audit', go: () => setActiveTab('cit-audit') },
         { key: 'democracy-events', icon: <Icon name="vote" size={18} />, label: 'EVENTOS DA DEMOCRACIA', active: activeTab === 'democracy-events', go: () => setActiveTab('democracy-events') },
@@ -1873,6 +1876,7 @@ function App() {
       ]
     : [
         { key: 'diario', icon: <Icon name="newspaper" size={18} />, label: 'DIÁRIO OFICIAL', active: activeTab === 'diario' && detailCitizenId === null, go: () => { setDetailCitizenId(null); setActiveTab('diario'); } },
+        { key: 'jogos', icon: <Icon name="gamepad" size={18} />, label: 'JOGOS', active: activeTab === 'jogos', go: () => { setDetailCitizenId(null); setActiveTab('jogos'); } },
         { key: 'adm-assistentes', icon: <Icon name="bot" size={18} />, label: 'ASSISTENTES', active: activeTab === 'adm-assistentes', go: () => { setDetailCitizenId(null); setActiveTab('adm-assistentes'); } },
         { key: 'adm-dashboard', icon: <Icon name="landmark" size={18} />, label: 'PAINEL ADMINISTRATIVO', active: activeTab === 'adm-dashboard' && detailCitizenId === null, go: () => { setDetailCitizenId(null); setActiveTab('adm-dashboard'); } },
         { key: 'adm-citizens', icon: <Icon name="users" size={18} />, label: 'GESTÃO DE USUÁRIOS', active: activeTab === 'adm-citizens' || detailCitizenId !== null, go: () => { setDetailCitizenId(null); setActiveTab('adm-citizens'); } },
@@ -3039,7 +3043,14 @@ function App() {
         )}
 
         {activeTab === 'adm-assistentes' && userRole === 'admin' && (
-          <AssistentesControle api={api} showToast={showToast} />
+          <>
+            <AssistentesControle api={api} showToast={showToast} />
+            <JogosRevisao api={api} showToast={showToast} />
+          </>
+        )}
+
+        {activeTab === 'jogos' && detailCitizenId === null && (
+          <Jogos api={api} showToast={showToast} username={username} onNavigate={(tab) => setActiveTab(tab)} />
         )}
 
         {activeTab === 'civic-vision' && (
