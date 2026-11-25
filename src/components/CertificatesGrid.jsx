@@ -1,4 +1,5 @@
 import React from 'react';
+import Icon from './Icon.jsx';
 
 const parseSafeCertDate = (dateVal) => {
   if (!dateVal) return new Date().toLocaleDateString('pt-BR');
@@ -19,43 +20,43 @@ const CertificatesGrid = ({ certificates = [] }) => {
   const officialDecorations = [
     {
       key: 'Estrela da Democracia',
-      icon: '🌟',
+      icon: 'sparkles',
       desc: 'Concedida por atos de coragem excepcionais em combate e serviço cívico extraordinário.',
       points: 100
     },
     {
       key: 'Ordem da Prosperidade',
-      icon: '⚙️',
+      icon: 'cog',
       desc: 'Para quem impulsionou a economia, indústria, inovação ou infraestrutura nacional.',
       points: 500
     },
     {
       key: 'Medalha da Verdade',
-      icon: '📖',
+      icon: 'book',
       desc: 'Para serviços excepcionais ao Ministério da Verdade, transparência e à informação.',
       points: 1000
     },
     {
       key: 'Cruz da Defesa Nacional',
-      icon: '⚔️',
+      icon: 'swords',
       desc: 'Por bravura notável na defesa do território, da soberania cívica e do povo.',
       points: 2000
     },
     {
       key: 'Medalha da Expansão',
-      icon: '🌐',
+      icon: 'globe',
       desc: 'Concedida pela conquista, integração ou incorporação de novos territórios e parcerias.',
       points: 3500
     },
     {
       key: 'Ordem da Unidade',
-      icon: '🤝',
+      icon: 'handshake',
       desc: 'Para civis e militares que fortaleceram a coesão, a harmonia e a unidade da nação.',
       points: 5000
     },
     {
       key: 'Ordem Suprema do Alto Comando',
-      icon: '🎖️',
+      icon: 'medal',
       desc: 'A maior honra da Democracia Gerenciada, concedida a poucos que serviram além do dever.',
       points: 8000
     }
@@ -76,12 +77,14 @@ const CertificatesGrid = ({ certificates = [] }) => {
         return (
           <div key={dec.key} className={`decoration-card ${isUnlocked ? 'unlocked' : 'locked'}`}>
             <div className="decoration-icon-box">
-              <span>{dec.icon}</span>
+              <Icon name={dec.icon} size={30} strokeWidth={1.5} />
             </div>
             <h4 className="decoration-title">{dec.key.toUpperCase()}</h4>
             <p className="decoration-desc">{dec.desc}</p>
             <div className={`decoration-status-pill ${isUnlocked ? 'granted' : 'locked'}`}>
-              {isUnlocked ? `🎖️ OUTORGADO (${dateString})` : `🔒 REQUER ${dec.points} PTS`}
+              {isUnlocked
+                ? <><Icon name="award" size={12} /> OUTORGADO ({dateString})</>
+                : <><Icon name="lock" size={12} /> REQUER {dec.points} PTS</>}
             </div>
           </div>
         );

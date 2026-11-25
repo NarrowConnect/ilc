@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { MINISTRY_EMBLEMS, formatRelative } from './ministerios';
+import Icon from './Icon.jsx';
 
 const PAGE_SIZE = 10;
 
@@ -139,7 +140,7 @@ function PostCard({ post, api, showToast, isAdmin, onChange, onRemove }) {
         </div>
         {isAdmin && (
           <div className="feed-menu-wrap">
-            <button type="button" className="feed-menu-btn" aria-label="Opções" onClick={() => setMenu((m) => !m)}>⋯</button>
+            <button type="button" className="feed-menu-btn" aria-label="Opções" onClick={() => setMenu((m) => !m)}><Icon name="more" size={20} /></button>
             {menu && (
               <div className="feed-menu">
                 <button type="button" onClick={pin}>{post.pinned ? 'Desafixar' : 'Fixar no topo'}</button>
@@ -167,12 +168,12 @@ function PostCard({ post, api, showToast, isAdmin, onChange, onRemove }) {
 
       <footer className="feed-actions">
         <button type="button" className={`feed-action ${post.supported_by_me ? 'active' : ''}`} onClick={support} aria-pressed={post.supported_by_me}>
-          <span className="feed-action-icon" aria-hidden="true">★</span>
+          <span className="feed-action-icon"><Icon name="star" size={18} fill={post.supported_by_me ? 'currentColor' : 'none'} /></span>
           {post.supported_by_me ? 'Apoiado' : 'Apoiar'}
           <span className="feed-count">{post.support_count}</span>
         </button>
         <button type="button" className={`feed-action ${open ? 'active' : ''}`} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-          <span className="feed-action-icon" aria-hidden="true">✎</span>
+          <span className="feed-action-icon"><Icon name="comment" size={18} /></span>
           Comentar
           <span className="feed-count">{post.comment_count}</span>
         </button>
@@ -272,7 +273,7 @@ export default function DiarioOficial({ api, showToast, isAdmin }) {
             <option value="">Todos os ministérios</option>
             {ministries.map((m) => <option key={m.code} value={m.code}>{m.name}</option>)}
           </select>
-          <button type="button" className="feed-refresh" onClick={() => load(true)} disabled={loading} aria-label="Atualizar">↻</button>
+          <button type="button" className="feed-refresh" onClick={() => load(true)} disabled={loading} aria-label="Atualizar"><Icon name="refresh" size={18} className={loading ? 'ilc-spin-slow' : ''} /></button>
         </div>
       </div>
 
