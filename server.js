@@ -78,7 +78,10 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
   passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback'
+    callbackURL: process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback',
+    // Sem GOOGLE_CALLBACK_URL, o callback usa o domínio acessado (https via X-Forwarded-Proto),
+    // então o login funciona em qualquer domínio cadastrado no Google Cloud Console.
+    proxy: true
   }, async (accessToken, refreshToken, profile, done) => {
     try {
       const avatar_url = profile.photos && profile.photos[0] ? profile.photos[0].value : (profile._json && profile._json.picture ? profile._json.picture : null);
