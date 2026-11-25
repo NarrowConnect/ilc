@@ -7,7 +7,7 @@ import { Browser } from '@capacitor/browser';
 import ScoreChart from './components/ScoreChart';
 import CertificatesGrid from './components/CertificatesGrid';
 import DiarioOficial from './components/DiarioOficial.jsx';
-import AssistentesControle from './components/AssistentesControle.jsx';
+import AssistentesControle, { NovoAssistenteForm } from './components/AssistentesControle.jsx';
 import { BANCO_CENTRAL_EMBLEM, INTELIGENCIA_EMBLEM } from './components/ministerios';
 import logoNorml from './imgs/lgo_norml.webp';
 import logoQuebrada from './imgs/lgo_quebrada.webp';
@@ -192,6 +192,7 @@ function App() {
   const [createCelular, setCreateCelular] = useState('');
   const [createPassword, setCreatePassword] = useState('');
   const [createRole, setCreateRole] = useState('usuario');
+  const [createKind, setCreateKind] = useState('usuario'); // 'usuario' | 'assistente'
   const [createHierarchyTitle, setCreateHierarchyTitle] = useState('Usuário Cívico');
   const [createAvatarUrl, setCreateAvatarUrl] = useState('');
 
@@ -2526,42 +2527,56 @@ function App() {
 
               {/* Cadastrar Usuário */}
               <div className="bento-card col-4">
-                <h3 className="card-title">INDEXAR NOVO USUÁRIO</h3>
+                <h3 className="card-title">{createKind === 'assistente' ? 'CRIAR ASSISTENTE' : 'INDEXAR NOVO USUÁRIO'}</h3>
+                <div className="ctl-seg create-switch" role="tablist">
+                  <button type="button" role="tab" aria-selected={createKind === 'usuario'} className={createKind === 'usuario' ? 'on' : ''} onClick={() => setCreateKind('usuario')}>Usuário</button>
+                  <button type="button" role="tab" aria-selected={createKind === 'assistente'} className={createKind === 'assistente' ? 'on' : ''} onClick={() => setCreateKind('assistente')}>Assistente</button>
+                </div>
+                {createKind === 'assistente' ? (
+                  <NovoAssistenteForm
+                    api={api}
+                    showToast={showToast}
+                    onCreated={() => { setCreateKind('usuario'); setActiveTab('adm-assistentes'); }}
+                  />
+                ) : (
+                  <>
                 <p className="card-subtitle">Cadastro de contas com Nível Base e Título Personalizado.</p>
-                <form onSubmit={handleAdminCreateUser} className="form-dense" style={{ marginTop: '15px' }}>
-                  <div className="form-group">
-                    <label>NICKNAME *</label>
-                    <input type="text" required value={createUsername} onChange={e => setCreateUsername(e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label>E-MAIL *</label>
-                    <input type="email" required value={createEmail} onChange={e => setCreateEmail(e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label>NÍVEL DE ACESSO BASE *</label>
-                    <select value={createRole} onChange={e => {
-                      setCreateRole(e.target.value);
-                      if (e.target.value === 'admin') setCreateHierarchyTitle('Administrador do Sistema');
-                      else setCreateHierarchyTitle('Usuário Cívico');
-                    }}>
-                      <option value="usuario">Usuário (Padrão)</option>
-                      <option value="admin">Administrador (Total)</option>
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label>TÍTULO PERSONALIZADO DA HIERARQUIA *</label>
-                    <input type="text" required value={createHierarchyTitle} onChange={e => setCreateHierarchyTitle(e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label>URL DA FOTO (OPCIONAL)</label>
-                    <input type="text" value={createAvatarUrl} onChange={e => setCreateAvatarUrl(e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label>SENHA TEMPORÁRIA *</label>
-                    <input type="password" required value={createPassword} onChange={e => setCreatePassword(e.target.value)} />
-                  </div>
-                  <button type="submit" className="state-btn success success-glow">INDEXAR USUÁRIO</button>
-                </form>
+                    <form onSubmit={handleAdminCreateUser} className="form-dense" style={{ marginTop: '15px' }}>
+                      <div className="form-group">
+                        <label>NICKNAME *</label>
+                        <input type="text" required value={createUsername} onChange={e => setCreateUsername(e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>E-MAIL *</label>
+                        <input type="email" required value={createEmail} onChange={e => setCreateEmail(e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>NÍVEL DE ACESSO BASE *</label>
+                        <select value={createRole} onChange={e => {
+                          setCreateRole(e.target.value);
+                          if (e.target.value === 'admin') setCreateHierarchyTitle('Administrador do Sistema');
+                          else setCreateHierarchyTitle('Usuário Cívico');
+                        }}>
+                          <option value="usuario">Usuário (Padrão)</option>
+                          <option value="admin">Administrador (Total)</option>
+                        </select>
+                      </div>
+                      <div className="form-group">
+                        <label>TÍTULO PERSONALIZADO DA HIERARQUIA *</label>
+                        <input type="text" required value={createHierarchyTitle} onChange={e => setCreateHierarchyTitle(e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>URL DA FOTO (OPCIONAL)</label>
+                        <input type="text" value={createAvatarUrl} onChange={e => setCreateAvatarUrl(e.target.value)} />
+                      </div>
+                      <div className="form-group">
+                        <label>SENHA TEMPORÁRIA *</label>
+                        <input type="password" required value={createPassword} onChange={e => setCreatePassword(e.target.value)} />
+                      </div>
+                      <button type="submit" className="state-btn success success-glow">INDEXAR USUÁRIO</button>
+                    </form>
+                  </>
+                )}
               </div>
             </div>
           </section>

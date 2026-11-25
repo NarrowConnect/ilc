@@ -2965,7 +2965,7 @@ input::-webkit-calendar-picker-indicator { filter: invert(80%) sepia(40%) satura
    CONTROLE DOS ASSISTENTES (ADMIN)
    ========================================== */
 .ctl-pane { max-width: 860px; margin: 0 auto; }
-.ctl-pane input[type="number"] {
+.ctl-pane input[type="number"], .ctl-new-form input[type="number"] {
   width: 100%; background: #0d0f0d; border: 1px solid var(--border); color: var(--text);
   padding: 12px 14px; font-size: 13px; border-radius: 6px; outline: none;
 }
@@ -3070,3 +3070,10 @@ label .ilc-icon, .audit-action-badge .ilc-icon, .audit-entity-badge .ilc-icon, .
 .state-btn:hover .ilc-icon.lucide-refresh-cw, .sim-btn:hover .ilc-icon.lucide-refresh-cw { animation: ilc-spin .8s ease; }
 .event-actions > * { flex: 1 1 calc(50% - 4px) !important; min-width: 0; min-height: 40px; white-space: nowrap; }
 .event-actions .ilc-icon { margin-right: 4px; }
+
+.ctl-list-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 8px 0 12px; flex-wrap: wrap; }
+.ctl-check { font-size: 13px; color: var(--text); letter-spacing: 0; font-family: var(--font-body); font-weight: 400; margin: 0; }
+.ctl-new-form .ctl-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ctl-new-note { margin: 0 0 14px; font-size: 12px; }
+.ctl-danger-zone { border-top: 1px dashed var(--border); padding-top: 10px; }
+.create-switch { margin: 10px 0 4px; }

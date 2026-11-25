@@ -75,35 +75,117 @@ function SuggestionQueue({ api, showToast, onReviewed }) {
   );
 }
 
-function AssistantCard({ a, api, showToast, onSaved }) {
+
+// Formulário de criação: usado na aba Assistentes e no cartão "Indexar novo usuário" do painel
+export function NovoAssistenteForm({ api, showToast, onCreated, onCancel, ministries: givenMinistries }) {
+  const [ministries, setMinistries] = useState(givenMinistries || []);
+  const [form, setForm] = useState({ name: '', ministry_code: '', persona: '', context: '', posts_per_day: 2, suggestions_per_day: 1 });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (givenMinistries && givenMinistries.length) return;
+    api('/ministries').then(setMinistries).catch(() => {});
+  }, []);
+
+  const set = (k, v) => setForm((f) => {
+    const next = { ...f, [k]: v };
+    // Sugere um nome enquanto o admin não escreveu o próprio
+    if (k === 'ministry_code' && (!f.name || f.name.startsWith('Assistente do '))) {
+      const m = ministries.find((x) => x.code === v);
+      next.name = m ? `Assistente do ${m.name}` : '';
+    }
+    return next;
+  });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api('/admin/assistants', {
+        method: 'POST',
+        body: { ...form, posts_per_day: Number(form.posts_per_day), suggestions_per_day: Number(form.suggestions_per_day) },
+      });
+      showToast('Assistente criado', `${form.name} entra em serviço na próxima agenda (amanhã, ou hoje se ainda não houver agenda).`, 'success');
+      setForm({ name: '', ministry_code: '', persona: '', context: '', posts_per_day: 2, suggestions_per_day: 1 });
+      if (onCreated) onCreated();
+    } catch (err) {
+      showToast('Não foi possível criar', err.message, 'warning');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="form-dense ctl-new-form" onSubmit={submit}>
+      <p className="field-desc ctl-new-note">Assistente não é usuário: não faz login nem tem carteira. Ele escreve no Diário Oficial e envia sugestões em nome do ministério.</p>
+      <div className="form-group">
+        <label>MINISTÉRIO *</label>
+        <select required value={form.ministry_code} onChange={(e) => set('ministry_code', e.target.value)}>
+          <option value="">Selecione o ministério...</option>
+          {ministries.map((m) => <option key={m.code} value={m.code}>{m.name}</option>)}
+        </select>
+      </div>
+      <div className="form-group">
+        <label>NOME DO ASSISTENTE *</label>
+        <input type="text" required maxLength={120} value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="Ex.: Cabo Ribeiro" />
+      </div>
+      <div className="form-group">
+        <label>PERSONALIDADE *</label>
+        <textarea required rows="3" maxLength={1000} value={form.persona} onChange={(e) => set('persona', e.target.value)} placeholder="Ex.: Oficial jovem, animado e direto. Fala de treinos e disciplina." />
+      </div>
+      <div className="form-group">
+        <label>CONTEXTO E DIRETRIZES (OPCIONAL)</label>
+        <textarea rows="3" maxLength={3000} value={form.context} onChange={(e) => set('context', e.target.value)} placeholder="O que ele deve priorizar ou evitar." />
+      </div>
+      <div className="ctl-grid2">
+        <div className="form-group">
+          <label>PUBLICAÇÕES POR DIA</label>
+          <input type="number" min="0" max="12" value={form.posts_per_day} onChange={(e) => set('posts_per_day', e.target.value)} />
+        </div>
+        <div className="form-group">
+          <label>SUGESTÕES POR DIA</label>
+          <input type="number" min="0" max="6" value={form.suggestions_per_day} onChange={(e) => set('suggestions_per_day', e.target.value)} />
+        </div>
+      </div>
+      <div className="ctl-row">
+        <button type="submit" className="state-btn primary ctl-btn" disabled={saving}>{saving ? 'Criando...' : 'Criar assistente'}</button>
+        {onCancel && <button type="button" className="state-btn outline ctl-btn" onClick={onCancel}>Cancelar</button>}
+      </div>
+    </form>
+  );
+}
+
+function AssistantCard({ a, api, showToast, onSaved, ministries }) {
   const [form, setForm] = useState(a);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(null);
   const [taskKind, setTaskKind] = useState('any');
   const [taskText, setTaskText] = useState('');
   const [open, setOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => { setForm(a); }, [a]);
 
-  const dirty = ['has_assistant', 'assistant_enabled', 'posts_per_day', 'suggestions_per_day', 'assistant_persona', 'assistant_context']
+  const dirty = ['name', 'ministry_code', 'enabled', 'posts_per_day', 'suggestions_per_day', 'persona', 'context']
     .some((k) => String(form[k]) !== String(a[k]));
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const save = async () => {
     setSaving(true);
     try {
-      await api(`/admin/assistants/${a.code}`, {
+      await api(`/admin/assistants/${a.id}`, {
         method: 'PUT',
         body: {
-          has_assistant: form.has_assistant,
-          assistant_enabled: form.assistant_enabled,
+          name: form.name,
+          ministry_code: form.ministry_code,
+          enabled: form.enabled,
           posts_per_day: Number(form.posts_per_day),
           suggestions_per_day: Number(form.suggestions_per_day),
-          assistant_persona: form.assistant_persona,
-          assistant_context: form.assistant_context,
+          persona: form.persona,
+          context: form.context,
         },
       });
-      showToast('Assistente atualizado', `${a.assistant_name} salvo. Mudanças na quantidade por dia valem a partir de amanhã.`, 'success');
+      showToast('Assistente atualizado', `${form.name} salvo. Mudanças na quantidade por dia valem a partir de amanhã.`, 'success');
       onSaved();
     } catch (err) {
       showToast('Não foi possível salvar', err.message, 'warning');
@@ -115,7 +197,7 @@ function AssistantCard({ a, api, showToast, onSaved }) {
   const runNow = async (kind) => {
     setRunning(kind);
     try {
-      const data = await api(`/admin/assistants/${a.code}/run`, { method: 'POST', body: { kind } });
+      const data = await api(`/admin/assistants/${a.id}/run`, { method: 'POST', body: { kind } });
       showToast(
         kind === 'post' ? 'Publicado no Diário Oficial' : 'Sugestão enviada para análise',
         `“${data.post.title}”`,
@@ -134,7 +216,7 @@ function AssistantCard({ a, api, showToast, onSaved }) {
     if (!instructions) return;
     setRunning(runImmediately ? 'task' : 'create');
     try {
-      const created = await api('/admin/assistant-tasks', { method: 'POST', body: { ministry_code: a.code, kind: taskKind, instructions } });
+      const created = await api('/admin/assistant-tasks', { method: 'POST', body: { assistant_id: a.id, kind: taskKind, instructions } });
       setTaskText('');
       if (runImmediately) {
         try {
@@ -172,20 +254,28 @@ function AssistantCard({ a, api, showToast, onSaved }) {
     }
   };
 
+  const remove = async () => {
+    try {
+      await api(`/admin/assistants/${a.id}`, { method: 'DELETE' });
+      showToast('Assistente excluído', a.name, 'success');
+      onSaved();
+    } catch (err) {
+      showToast('Erro', err.message, 'warning');
+    }
+  };
+
   const openTasks = a.tasks.filter((t) => t.status === 'open');
   const pastTasks = a.tasks.filter((t) => t.status !== 'open').slice(0, 5);
   const busy = running !== null;
 
   return (
-    <div className={`bento-card ctl-assistant ${a.has_assistant ? '' : 'off'}`}>
+    <div className={`bento-card ctl-assistant ${a.enabled ? '' : 'off'}`}>
       <button type="button" className="ctl-assistant-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <img className="ctl-emblem" src={MINISTRY_EMBLEMS[a.code]} alt="" />
+        <img className="ctl-emblem" src={MINISTRY_EMBLEMS[a.ministry_code]} alt="" />
         <div className="ctl-assistant-titles">
-          <span className="ctl-ministry">{a.ministry_name}</span>
+          <span className="ctl-ministry">{a.name}</span>
           <span className="ctl-meta">
-            {a.has_assistant
-              ? `${a.assistant_name} · ${a.assistant_enabled ? 'em serviço' : 'pausado'} · ${a.posts_per_day} ${a.posts_per_day === 1 ? 'publicação' : 'publicações'} e ${a.suggestions_per_day} ${a.suggestions_per_day === 1 ? 'sugestão' : 'sugestões'} por dia`
-              : 'Sem assistente'}
+            {`${a.ministry_name} · ${a.enabled ? 'em serviço' : 'pausado'} · ${a.posts_per_day} ${a.posts_per_day === 1 ? 'publicação' : 'publicações'} e ${a.suggestions_per_day} ${a.suggestions_per_day === 1 ? 'sugestão' : 'sugestões'} por dia`}
             {openTasks.length > 0 && ` · ${openTasks.length} ${openTasks.length === 1 ? 'tarefa' : 'tarefas'} na fila`}
           </span>
         </div>
@@ -196,42 +286,41 @@ function AssistantCard({ a, api, showToast, onSaved }) {
         <div className="ctl-assistant-body">
           <p className="ctl-mission">{a.mission}</p>
 
-          <div className="ctl-toggles">
-            <label className="checkbox-container">
-              <input type="checkbox" checked={!!form.has_assistant} onChange={(e) => set('has_assistant', e.target.checked)} />
-              Este ministério tem assistente
-            </label>
-            {form.has_assistant && (
-              <label className="checkbox-container">
-                <input type="checkbox" checked={!!form.assistant_enabled} onChange={(e) => set('assistant_enabled', e.target.checked)} />
-                Em serviço (publica nos horários sorteados)
-              </label>
-            )}
+          <div className="ctl-grid2">
+            <div className="form-group">
+              <label>NOME</label>
+              <input type="text" maxLength={120} value={form.name} onChange={(e) => set('name', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label>MINISTÉRIO</label>
+              <select value={form.ministry_code} onChange={(e) => set('ministry_code', e.target.value)}>
+                {ministries.map((m) => <option key={m.code} value={m.code}>{m.name}</option>)}
+              </select>
+            </div>
           </div>
-
-          {form.has_assistant && (
-            <>
-              <div className="ctl-grid2">
-                <div className="form-group">
-                  <label>PUBLICAÇÕES POR DIA</label>
-                  <input type="number" min="0" max="12" value={form.posts_per_day} onChange={(e) => set('posts_per_day', e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label>SUGESTÕES POR DIA</label>
-                  <input type="number" min="0" max="6" value={form.suggestions_per_day} onChange={(e) => set('suggestions_per_day', e.target.value)} />
-                </div>
-              </div>
-              <div className="form-group">
-                <label>PERSONALIDADE</label>
-                <textarea rows="3" maxLength={1000} value={form.assistant_persona} onChange={(e) => set('assistant_persona', e.target.value)} placeholder="Como o assistente fala e se comporta." />
-              </div>
-              <div className="form-group">
-                <label>CONTEXTO E DIRETRIZES PERMANENTES</label>
-                <textarea rows="4" maxLength={3000} value={form.assistant_context} onChange={(e) => set('assistant_context', e.target.value)} placeholder="Ex.: Nesta temporada, o foco é a campanha de alistamento. Sempre cite o lema nacional. Evite falar de impostos." />
-                <span className="field-desc">O assistente lê isto em todas as publicações e sugestões.</span>
-              </div>
-            </>
-          )}
+          <label className="checkbox-container ctl-check">
+            <input type="checkbox" checked={!!form.enabled} onChange={(e) => set('enabled', e.target.checked)} />
+            Em serviço (publica nos horários sorteados)
+          </label>
+          <div className="ctl-grid2">
+            <div className="form-group">
+              <label>PUBLICAÇÕES POR DIA</label>
+              <input type="number" min="0" max="12" value={form.posts_per_day} onChange={(e) => set('posts_per_day', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label>SUGESTÕES POR DIA</label>
+              <input type="number" min="0" max="6" value={form.suggestions_per_day} onChange={(e) => set('suggestions_per_day', e.target.value)} />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>PERSONALIDADE</label>
+            <textarea rows="3" maxLength={1000} value={form.persona} onChange={(e) => set('persona', e.target.value)} placeholder="Como o assistente fala e se comporta." />
+          </div>
+          <div className="form-group">
+            <label>CONTEXTO E DIRETRIZES PERMANENTES</label>
+            <textarea rows="4" maxLength={3000} value={form.context} onChange={(e) => set('context', e.target.value)} placeholder="Ex.: Nesta temporada, o foco é a campanha de alistamento. Sempre cite o lema nacional. Evite falar de impostos." />
+            <span className="field-desc">O assistente lê isto em todas as publicações e sugestões.</span>
+          </div>
 
           {dirty && (
             <button type="button" className="state-btn primary ctl-btn" disabled={saving} onClick={save}>
@@ -239,7 +328,7 @@ function AssistantCard({ a, api, showToast, onSaved }) {
             </button>
           )}
 
-          {a.has_assistant && !dirty && (
+          {!dirty && (
             <>
               <div className="ctl-section-label">TAREFAS</div>
               <div className="ctl-task-form">
@@ -300,6 +389,17 @@ function AssistantCard({ a, api, showToast, onSaved }) {
                   {running === 'suggestion' ? 'Escrevendo...' : 'Sugerir agora'}
                 </button>
               </div>
+              <div className="ctl-row ctl-danger-zone">
+                {!confirmDelete ? (
+                  <button type="button" className="feed-link-btn danger" onClick={() => setConfirmDelete(true)}>Excluir assistente</button>
+                ) : (
+                  <>
+                    <span className="ctl-meta">Excluir {a.name}? As publicações já feitas continuam no Diário Oficial.</span>
+                    <button type="button" className="state-btn warning ctl-btn" onClick={remove}>Excluir</button>
+                    <button type="button" className="state-btn outline ctl-btn" onClick={() => setConfirmDelete(false)}>Cancelar</button>
+                  </>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -313,6 +413,7 @@ export default function AssistentesControle({ api, showToast }) {
   const [error, setError] = useState(null);
   const [model, setModel] = useState('');
   const [savingModel, setSavingModel] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const load = () => {
     api('/admin/assistants')
@@ -371,9 +472,27 @@ export default function AssistentesControle({ api, showToast }) {
 
           <SuggestionQueue api={api} showToast={showToast} onReviewed={load} />
 
-          <h3 className="ctl-h3 ctl-list-title">MINISTÉRIOS</h3>
+          <div className="ctl-list-head">
+            <h3 className="ctl-h3">ASSISTENTES ({data.assistants.length})</h3>
+            {!creating && data.assistants.length < data.max_assistants && (
+              <button type="button" className="state-btn primary ctl-btn" onClick={() => setCreating(true)}>+ Criar assistente</button>
+            )}
+          </div>
+          {creating && (
+            <div className="bento-card ctl-block">
+              <h3 className="ctl-h3" style={{ marginBottom: '12px' }}>NOVO ASSISTENTE</h3>
+              <NovoAssistenteForm
+                api={api}
+                showToast={showToast}
+                ministries={data.ministries}
+                onCreated={() => { setCreating(false); load(); }}
+                onCancel={() => setCreating(false)}
+              />
+            </div>
+          )}
+          {data.assistants.length === 0 && <p className="feed-muted">Nenhum assistente. Crie o primeiro.</p>}
           {data.assistants.map((a) => (
-            <AssistantCard key={a.code} a={a} api={api} showToast={showToast} onSaved={load} />
+            <AssistantCard key={a.id} a={a} api={api} showToast={showToast} onSaved={load} ministries={data.ministries} />
           ))}
         </>
       )}

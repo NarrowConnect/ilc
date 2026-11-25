@@ -142,8 +142,9 @@ CREATE INDEX IF NOT EXISTS idx_dep_event ON democracy_event_participants(event_i
 -- ==========================================
 -- MINISTÉRIOS, DIÁRIO OFICIAL E ASSISTENTES (IA)
 -- ==========================================
--- Os 6 ministérios existem no app; 4 deles têm um "Assistente" movido a IA (OpenRouter)
--- que publica no Diário Oficial e envia sugestões para aprovação.
+-- Os 6 ministérios existem no app. Os assistentes (tabela assistants) são movidos a IA (OpenRouter),
+-- publicam no Diário Oficial e enviam sugestões para aprovação. As colunas assistant_* de ministries
+-- só servem de semente para os 4 assistentes iniciais.
 
 CREATE TABLE IF NOT EXISTS ministries (
     code TEXT PRIMARY KEY,
@@ -157,6 +158,21 @@ CREATE TABLE IF NOT EXISTS ministries (
     assistant_enabled INTEGER NOT NULL DEFAULT 1,
     posts_per_day INTEGER NOT NULL DEFAULT 3 CHECK (posts_per_day BETWEEN 0 AND 12),
     suggestions_per_day INTEGER NOT NULL DEFAULT 1 CHECK (suggestions_per_day BETWEEN 0 AND 6)
+);
+
+-- Assistentes: não são usuários (não fazem login, não têm carteira). Cada um trabalha para um ministério.
+-- As colunas assistant_id de feed_posts/assistant_runs/assistant_tasks são criadas em ministerios.js (migração).
+CREATE TABLE IF NOT EXISTS assistants (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6)))),
+    ministry_code TEXT NOT NULL REFERENCES ministries(code),
+    name TEXT NOT NULL,
+    persona TEXT NOT NULL,
+    context TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    posts_per_day INTEGER NOT NULL DEFAULT 3 CHECK (posts_per_day BETWEEN 0 AND 12),
+    suggestions_per_day INTEGER NOT NULL DEFAULT 1 CHECK (suggestions_per_day BETWEEN 0 AND 6),
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE TABLE IF NOT EXISTS feed_posts (

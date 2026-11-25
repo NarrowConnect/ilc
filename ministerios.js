@@ -2,9 +2,10 @@
 // MINISTÉRIOS, DIÁRIO OFICIAL E ASSISTENTES DE IA
 // ==========================================
 // - Diário Oficial: feed com as publicações dos ministérios. Cidadãos apoiam e comentam.
-// - Assistentes: 4 ministérios têm um "Assistente do Ministério X" que, em horários
-//   sorteados ao longo do dia, escreve publicações (vão direto ao feed) e sugestões de
-//   melhoria (ficam como rascunho até um admin aprovar).
+// - Assistentes (tabela assistants): não são usuários. Cada um trabalha para um ministério e,
+//   em horários sorteados ao longo do dia, escreve publicações (vão direto ao feed) e
+//   sugestões de melhoria (ficam como rascunho até um admin aprovar). Começam 4 (Verdade,
+//   Prosperidade, Defesa, Educação) e o admin cria ou exclui outros pelo painel.
 // - Todo texto dos assistentes vem da IA (OpenRouter). Não há textos prontos de reserva:
 //   se a IA falhar, a rodada é pulada e a falha fica no log de auditoria.
 //
@@ -146,10 +147,59 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
   }
 
   // ------------------------------------------
+  // Migração: assistentes separados dos ministérios
+  // ------------------------------------------
+  // Assistentes não são usuários: não fazem login nem têm carteira. Os 4 iniciais vêm das
+  // colunas assistant_* da tabela ministries (com id igual ao código do ministério).
+  async function columnExists(table, column) {
+    const res = await pool.query(`SELECT name FROM pragma_table_info('${table}') WHERE name = $1`, [column]);
+    return res.rows.length > 0;
+  }
+
+  async function migrate() {
+    const add = async (table, column, ddl) => {
+      if (!(await columnExists(table, column))) await pool.query(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    };
+    await add('feed_posts', 'assistant_id', 'assistant_id TEXT REFERENCES assistants(id) ON DELETE SET NULL');
+    await add('feed_posts', 'author_name', 'author_name TEXT');
+    await add('assistant_runs', 'assistant_id', 'assistant_id TEXT REFERENCES assistants(id) ON DELETE CASCADE');
+    await add('assistant_tasks', 'assistant_id', 'assistant_id TEXT REFERENCES assistants(id) ON DELETE CASCADE');
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_assistant_runs_assistant ON assistant_runs(day, assistant_id)');
+
+    const done = await pool.query("SELECT value FROM app_settings WHERE key = 'migration_assistants_v1'");
+    if (done.rows.length) return;
+    await pool.query(
+      `INSERT OR IGNORE INTO assistants (id, ministry_code, name, persona, context, enabled, posts_per_day, suggestions_per_day)
+       SELECT code, code, COALESCE(assistant_name, 'Assistente do ' || name), assistant_persona, assistant_context,
+              assistant_enabled, posts_per_day, suggestions_per_day
+       FROM ministries WHERE has_assistant = 1 AND assistant_persona IS NOT NULL`
+    );
+    await pool.query('UPDATE feed_posts SET assistant_id = ministry_code WHERE assistant_id IS NULL AND ministry_code IN (SELECT id FROM assistants)');
+    await pool.query(`UPDATE feed_posts SET author_name = (SELECT name FROM assistants a WHERE a.id = feed_posts.assistant_id)
+                      WHERE author_name IS NULL AND assistant_id IS NOT NULL`);
+    await pool.query('UPDATE assistant_runs SET assistant_id = ministry_code WHERE assistant_id IS NULL AND ministry_code IN (SELECT id FROM assistants)');
+    await pool.query('UPDATE assistant_tasks SET assistant_id = ministry_code WHERE assistant_id IS NULL AND ministry_code IN (SELECT id FROM assistants)');
+    await pool.query("INSERT INTO app_settings (key, value) VALUES ('migration_assistants_v1', $1)", [new Date().toISOString()]);
+    console.log('🤖 Assistentes migrados para a tabela própria.');
+  }
+
+  const ready = migrate().catch((err) => {
+    console.error('❌ Falha na migração dos assistentes:', err.message);
+  });
+
+  const ASSISTANT_SELECT = `SELECT a.*, m.name AS ministry_name, m.mission
+                            FROM assistants a JOIN ministries m ON m.code = a.ministry_code`;
+
+  async function loadAssistant(id) {
+    const res = await pool.query(`${ASSISTANT_SELECT} WHERE a.id = $1`, [id]);
+    return res.rows[0] || null;
+  }
+
+  // ------------------------------------------
   // Contexto que o assistente lê antes de escrever
   // ------------------------------------------
-  async function buildContext(ministry, kind) {
-    const [citizens, tiers, pending, events, recentPosts, ownSuggestions] = await Promise.all([
+  async function buildContext(assistant, kind) {
+    const [citizens, tiers, pending, events, recentPosts, ownSuggestions, colleagues] = await Promise.all([
       pool.query(`SELECT COUNT(*) AS total, COALESCE(AVG(sa.current_score), 5000) AS media
                   FROM users u LEFT JOIN score_accounts sa ON sa.user_id = u.id WHERE u.status = 'active'`),
       pool.query(`SELECT t.name, COUNT(sa.id) AS total FROM score_tiers t
@@ -160,8 +210,9 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
                   WHERE event_date >= $1 ORDER BY event_date ASC LIMIT 3`, [new Date().toISOString()]),
       pool.query(`SELECT fp.title, m.name AS ministry FROM feed_posts fp JOIN ministries m ON m.code = fp.ministry_code
                   WHERE fp.status = 'published' ORDER BY fp.published_at DESC LIMIT 10`),
-      pool.query(`SELECT title, status FROM feed_posts WHERE ministry_code = $1 AND kind = 'suggestion'
-                  ORDER BY created_at DESC LIMIT 8`, [ministry.code]),
+      pool.query(`SELECT title, status FROM feed_posts WHERE assistant_id = $1 AND kind = 'suggestion'
+                  ORDER BY created_at DESC LIMIT 8`, [assistant.id]),
+      pool.query('SELECT name FROM assistants WHERE ministry_code = $1 AND id != $2 AND enabled = 1', [assistant.ministry_code, assistant.id]),
     ]);
 
     const lines = [];
@@ -176,6 +227,9 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     }
     const { day } = localParts();
     lines.push(`Data de hoje: ${day.split('-').reverse().join('/')}.`);
+    if (colleagues.rows.length) {
+      lines.push(`Colegas de ministério: ${colleagues.rows.map((x) => x.name).join(', ')}.`);
+    }
     if (recentPosts.rows.length) {
       lines.push(`Últimas publicações no Diário Oficial (não repita estes assuntos): ${recentPosts.rows.map((p) => `[${p.ministry}] ${p.title}`).join(' | ')}.`);
     }
@@ -185,13 +239,13 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     return lines.join('\n');
   }
 
-  function buildMessages(ministry, kind, context, task) {
+  function buildMessages(assistant, kind, context, task) {
     const system = [
       LORE,
       '',
-      `Você é o "${ministry.assistant_name}". Competência do ministério: ${ministry.mission}`,
-      `Sua personalidade: ${ministry.assistant_persona || 'servidor público dedicado e formal.'}`,
-      ...(ministry.assistant_context ? ['', `Diretrizes permanentes do Alto Comando para você (siga sempre): ${ministry.assistant_context}`] : []),
+      `Você é "${assistant.name}", assistente do ${assistant.ministry_name}. Competência do ministério: ${assistant.mission}`,
+      `Sua personalidade: ${assistant.persona || 'servidor público dedicado e formal.'}`,
+      ...(assistant.context ? ['', `Diretrizes permanentes do Alto Comando para você (siga sempre): ${assistant.context}`] : []),
     ].join('\n');
 
     const instructions = kind === 'post'
@@ -219,28 +273,28 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     ];
   }
 
-  // Gera um texto com a IA e grava no feed. Lança erro se a IA falhar (sem texto de reserva).
   // Sem tarefa explícita, usa a tarefa aberta mais antiga desse assistente (do mesmo tipo ou "qualquer").
-  async function nextOpenTask(ministryCode, kind) {
+  async function nextOpenTask(assistantId, kind) {
     const res = await pool.query(
-      `SELECT * FROM assistant_tasks WHERE ministry_code = $1 AND status = 'open' AND kind IN ($2, 'any')
+      `SELECT * FROM assistant_tasks WHERE assistant_id = $1 AND status = 'open' AND kind IN ($2, 'any')
        ORDER BY created_at ASC LIMIT 1`,
-      [ministryCode, kind]
+      [assistantId, kind]
     );
     return res.rows[0] || null;
   }
 
-  async function generateFor(ministry, kind, explicitTask) {
-    const task = explicitTask === undefined ? await nextOpenTask(ministry.code, kind) : explicitTask;
-    const context = await buildContext(ministry, kind);
-    const { content, model } = await callOpenRouter(buildMessages(ministry, kind, context, task));
+  // Gera um texto com a IA e grava no feed. Lança erro se a IA falhar (sem texto de reserva).
+  async function generateFor(assistant, kind, explicitTask) {
+    const task = explicitTask === undefined ? await nextOpenTask(assistant.id, kind) : explicitTask;
+    const context = await buildContext(assistant, kind);
+    const { content, model } = await callOpenRouter(buildMessages(assistant, kind, context, task));
     const { title, body } = parseAiJson(content);
     const status = kind === 'post' ? 'published' : 'draft';
     const now = new Date().toISOString();
     const res = await pool.query(
-      `INSERT INTO feed_posts (ministry_code, kind, title, body, status, ai_model, published_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [ministry.code, kind, title, body, status, model, status === 'published' ? now : null]
+      `INSERT INTO feed_posts (ministry_code, assistant_id, author_name, kind, title, body, status, ai_model, published_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [assistant.ministry_code, assistant.id, assistant.name, kind, title, body, status, model, status === 'published' ? now : null]
     );
     const postId = res.rows[0].id;
     if (task) {
@@ -262,55 +316,52 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     const windowStart = Math.max(WINDOW_START_HOUR * 60, nowMinutes + 2);
     const windowEnd = WINDOW_END_HOUR * 60;
 
-    const ministries = await pool.query(
-      'SELECT code, posts_per_day, suggestions_per_day FROM ministries WHERE has_assistant = 1 AND assistant_enabled = 1'
-    );
-    for (const m of ministries.rows) {
-      const existing = await pool.query('SELECT COUNT(*) AS total FROM assistant_runs WHERE day = $1 AND ministry_code = $2', [day, m.code]);
+    const assistants = await pool.query('SELECT id, ministry_code, posts_per_day, suggestions_per_day FROM assistants WHERE enabled = 1');
+    for (const a of assistants.rows) {
+      const existing = await pool.query('SELECT COUNT(*) AS total FROM assistant_runs WHERE day = $1 AND assistant_id = $2', [day, a.id]);
       if (Number(existing.rows[0].total) > 0) continue;
       const plan = [
-        ...Array(m.posts_per_day).fill('post'),
-        ...Array(m.suggestions_per_day).fill('suggestion'),
+        ...Array(a.posts_per_day).fill('post'),
+        ...Array(a.suggestions_per_day).fill('suggestion'),
       ];
       if (plan.length === 0) continue;
       if (windowStart >= windowEnd) {
         // Já passou do horário: registra o dia como sem rodadas para não reagendar a cada minuto
         await pool.query(
-          `INSERT INTO assistant_runs (ministry_code, kind, day, scheduled_for, status, error)
-           VALUES ($1, 'post', $2, $3, 'skipped', 'Agenda criada fora do horário de trabalho')`,
-          [m.code, day, now.toISOString()]
+          `INSERT INTO assistant_runs (ministry_code, assistant_id, kind, day, scheduled_for, status, error)
+           VALUES ($1, $2, 'post', $3, $4, 'skipped', 'Agenda criada fora do horário de trabalho')`,
+          [a.ministry_code, a.id, day, now.toISOString()]
         );
         continue;
       }
       for (const kind of plan) {
         const minutes = windowStart + Math.floor(Math.random() * (windowEnd - windowStart));
         await pool.query(
-          'INSERT INTO assistant_runs (ministry_code, kind, day, scheduled_for) VALUES ($1, $2, $3, $4)',
-          [m.code, kind, day, localTime(day, minutes).toISOString()]
+          'INSERT INTO assistant_runs (ministry_code, assistant_id, kind, day, scheduled_for) VALUES ($1, $2, $3, $4, $5)',
+          [a.ministry_code, a.id, kind, day, localTime(day, minutes).toISOString()]
         );
       }
     }
   }
 
   async function executeRun(run) {
-    const mRes = await pool.query('SELECT * FROM ministries WHERE code = $1', [run.ministry_code]);
-    const ministry = mRes.rows[0];
-    if (!ministry || !ministry.has_assistant || !ministry.assistant_enabled) {
+    const assistant = run.assistant_id ? await loadAssistant(run.assistant_id) : null;
+    if (!assistant || !assistant.enabled) {
       await pool.query("UPDATE assistant_runs SET status = 'skipped', error = 'Assistente desligado', ran_at = $1 WHERE id = $2", [new Date().toISOString(), run.id]);
       return;
     }
     await pool.query("UPDATE assistant_runs SET status = 'running' WHERE id = $1", [run.id]);
     try {
-      const post = await generateFor(ministry, run.kind);
+      const post = await generateFor(assistant, run.kind);
       await pool.query("UPDATE assistant_runs SET status = 'done', post_id = $1, ran_at = $2 WHERE id = $3", [post.id, new Date().toISOString(), run.id]);
       await audit(null, 'feed_posts', post.id, run.kind === 'post' ? 'assistant_post' : 'assistant_suggestion', {
-        ministry: ministry.code, title: post.title, model: post.model, status: post.status,
+        assistant: assistant.name, ministry: assistant.ministry_code, title: post.title, model: post.model, status: post.status,
       });
-      console.log(`🤖 ${ministry.assistant_name}: ${run.kind === 'post' ? 'publicou' : 'sugeriu'} "${post.title}"`);
+      console.log(`🤖 ${assistant.name}: ${run.kind === 'post' ? 'publicou' : 'sugeriu'} "${post.title}"`);
     } catch (err) {
       await pool.query("UPDATE assistant_runs SET status = 'failed', error = $1, ran_at = $2 WHERE id = $3", [err.message.slice(0, 500), new Date().toISOString(), run.id]);
-      await audit(null, 'assistant_runs', run.id, 'assistant_failed', { ministry: ministry.code, kind: run.kind, error: err.message.slice(0, 500) });
-      console.warn(`⚠️  ${ministry.assistant_name}: rodada pulada (${err.message})`);
+      await audit(null, 'assistant_runs', run.id, 'assistant_failed', { assistant: assistant.name, ministry: assistant.ministry_code, kind: run.kind, error: err.message.slice(0, 500) });
+      console.warn(`⚠️  ${assistant.name}: rodada pulada (${err.message})`);
     }
   }
 
@@ -318,6 +369,7 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     if (ticking) return;
     ticking = true;
     try {
+      await ready;
       await ensureTodaySchedule();
       const nowIso = new Date().toISOString();
       const staleIso = new Date(Date.now() - STALE_AFTER_MS).toISOString();
@@ -346,6 +398,7 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
   }
 
   async function startScheduler() {
+    await ready;
     if (process.env.ASSISTANTS_DISABLED === 'true') {
       console.log('⏸️  Assistentes dos ministérios desligados (ASSISTANTS_DISABLED=true).');
       return;
@@ -356,6 +409,10 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     setInterval(tick, TICK_MS);
     console.log(`🤖 Assistentes dos ministérios ativos${process.env.OPENROUTER_API_KEY ? '' : ' (aguardando OPENROUTER_API_KEY)'}.`);
   }
+
+  // As rotas abaixo esperam a migração terminar (só importa no primeiro segundo após o boot)
+  const awaitReady = (req, res, next) => { ready.then(() => next(), next); };
+  app.use(['/api/feed', '/api/ministries', '/api/admin/feed', '/api/admin/suggestions', '/api/admin/assistants', '/api/admin/assistant-tasks', '/api/admin/assistants-settings'], awaitReady);
 
   // ------------------------------------------
   // Rotas: ministérios e Diário Oficial
@@ -380,10 +437,11 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
   app.get('/api/ministries', authenticateToken, async (req, res) => {
     try {
       const result = await pool.query(
-        `SELECT code, name, mission, sort_order, has_assistant, assistant_name, assistant_enabled
-         FROM ministries ORDER BY sort_order ASC`
+        `SELECT m.code, m.name, m.mission, m.sort_order,
+                (SELECT COUNT(*) FROM assistants a WHERE a.ministry_code = m.code AND a.enabled = 1) AS active_assistants
+         FROM ministries m ORDER BY m.sort_order ASC`
       );
-      res.json(result.rows.map((m) => ({ ...m, has_assistant: !!m.has_assistant, assistant_enabled: !!m.assistant_enabled })));
+      res.json(result.rows.map((m) => ({ ...m, active_assistants: Number(m.active_assistants) })));
     } catch (err) {
       res.status(500).json({ error: 'Erro ao carregar ministérios: ' + err.message });
     }
@@ -402,7 +460,7 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
       // Fixados aparecem só no topo da primeira página
       const order = before ? 'fp.published_at DESC' : 'fp.pinned DESC, fp.published_at DESC';
       const result = await pool.query(
-        `SELECT fp.*, m.name AS ministry_name, m.assistant_name,
+        `SELECT fp.*, m.name AS ministry_name, fp.author_name AS assistant_name,
                 (SELECT COUNT(*) FROM feed_reactions r WHERE r.post_id = fp.id) AS support_count,
                 (SELECT COUNT(*) FROM feed_comments c WHERE c.post_id = fp.id) AS comment_count,
                 EXISTS (SELECT 1 FROM feed_reactions r WHERE r.post_id = fp.id AND r.user_id = $1) AS supported_by_me
@@ -551,7 +609,7 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     const status = ['draft', 'published', 'rejected'].includes(req.query.status) ? req.query.status : 'draft';
     try {
       const result = await pool.query(
-        `SELECT fp.*, m.name AS ministry_name, m.assistant_name, u.username AS reviewed_by_name
+        `SELECT fp.*, m.name AS ministry_name, fp.author_name AS assistant_name, u.username AS reviewed_by_name
          FROM feed_posts fp JOIN ministries m ON m.code = fp.ministry_code
          LEFT JOIN users u ON u.id = fp.reviewed_by
          WHERE fp.kind = 'suggestion' AND fp.status = $1
@@ -584,20 +642,44 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     }
   });
 
+  const MAX_ASSISTANTS = 20;
+
+  const assistantBody = (b, cur = {}) => {
+    const text = (value, fallback, max) => (value === undefined ? fallback : String(value || '').trim().slice(0, max));
+    return {
+      name: text(b.name, cur.name, 120),
+      ministry_code: b.ministry_code === undefined ? cur.ministry_code : String(b.ministry_code),
+      persona: text(b.persona, cur.persona, 1000),
+      context: text(b.context, cur.context, 3000) || null,
+      enabled: b.enabled === undefined ? (cur.enabled === undefined ? 1 : cur.enabled) : (b.enabled ? 1 : 0),
+      posts_per_day: b.posts_per_day === undefined ? (cur.posts_per_day ?? 3) : clampInt(b.posts_per_day, 0, 12, cur.posts_per_day ?? 3),
+      suggestions_per_day: b.suggestions_per_day === undefined ? (cur.suggestions_per_day ?? 1) : clampInt(b.suggestions_per_day, 0, 6, cur.suggestions_per_day ?? 1),
+    };
+  };
+
+  async function validateAssistant(next) {
+    if (!next.name) return 'Dê um nome ao assistente.';
+    if (!next.persona) return 'Descreva a personalidade do assistente.';
+    const m = await pool.query('SELECT code FROM ministries WHERE code = $1', [next.ministry_code]);
+    if (m.rows.length === 0) return 'Escolha um ministério válido.';
+    return null;
+  }
+
   app.get('/api/admin/assistants', authenticateToken, requireRole(['admin']), async (req, res) => {
     try {
       const { day } = localParts();
-      const [ministries, runs, lastFailures, model, drafts, tasks] = await Promise.all([
-        pool.query('SELECT * FROM ministries ORDER BY sort_order ASC'),
+      const [ministries, assistants, runs, lastFailures, model, drafts, tasks] = await Promise.all([
+        pool.query('SELECT code, name, mission FROM ministries ORDER BY sort_order ASC'),
+        pool.query(`${ASSISTANT_SELECT} ORDER BY m.sort_order ASC, a.created_at ASC`),
         pool.query(
-          `SELECT r.id, r.ministry_code, r.kind, r.scheduled_for, r.status, r.error, r.ran_at, fp.title AS post_title
+          `SELECT r.id, r.assistant_id, r.kind, r.scheduled_for, r.status, r.error, r.ran_at, fp.title AS post_title
            FROM assistant_runs r LEFT JOIN feed_posts fp ON fp.id = r.post_id
            WHERE r.day = $1 ORDER BY r.scheduled_for ASC`,
           [day]
         ),
         pool.query(
-          `SELECT ministry_code, error, ran_at FROM assistant_runs
-           WHERE status = 'failed' ORDER BY ran_at DESC LIMIT 30`
+          `SELECT assistant_id, error, ran_at FROM assistant_runs
+           WHERE status = 'failed' ORDER BY ran_at DESC LIMIT 50`
         ),
         getModelSetting(),
         pool.query("SELECT COUNT(*) AS total FROM feed_posts WHERE kind = 'suggestion' AND status = 'draft'"),
@@ -605,7 +687,7 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
           `SELECT t.*, fp.title AS post_title, fp.status AS post_status FROM assistant_tasks t
            LEFT JOIN feed_posts fp ON fp.id = t.post_id
            WHERE t.status = 'open' OR t.created_at >= $1
-           ORDER BY t.created_at DESC LIMIT 200`,
+           ORDER BY t.created_at DESC LIMIT 300`,
           [new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString()]
         ),
       ]);
@@ -616,20 +698,23 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
         default_model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
         window: { start_hour: WINDOW_START_HOUR, end_hour: WINDOW_END_HOUR },
         pending_suggestions: Number(drafts.rows[0].total),
-        assistants: ministries.rows.map((m) => ({
-          code: m.code,
-          ministry_name: m.name,
-          mission: m.mission,
-          has_assistant: !!m.has_assistant,
-          assistant_name: m.assistant_name || `Assistente do ${m.name}`,
-          assistant_persona: m.assistant_persona || '',
-          assistant_context: m.assistant_context || '',
-          assistant_enabled: !!m.assistant_enabled,
-          posts_per_day: m.posts_per_day,
-          suggestions_per_day: m.suggestions_per_day,
-          today: runs.rows.filter((r) => r.ministry_code === m.code && r.error !== 'Agenda criada fora do horário de trabalho'),
-          last_failure: lastFailures.rows.find((f) => f.ministry_code === m.code) || null,
-          tasks: tasks.rows.filter((t) => t.ministry_code === m.code),
+        max_assistants: MAX_ASSISTANTS,
+        ministries: ministries.rows,
+        assistants: assistants.rows.map((a) => ({
+          id: a.id,
+          name: a.name,
+          ministry_code: a.ministry_code,
+          ministry_name: a.ministry_name,
+          mission: a.mission,
+          persona: a.persona,
+          context: a.context || '',
+          enabled: !!a.enabled,
+          posts_per_day: a.posts_per_day,
+          suggestions_per_day: a.suggestions_per_day,
+          created_at: a.created_at,
+          today: runs.rows.filter((r) => r.assistant_id === a.id && r.error !== 'Agenda criada fora do horário de trabalho'),
+          last_failure: lastFailures.rows.find((f) => f.assistant_id === a.id) || null,
+          tasks: tasks.rows.filter((t) => t.assistant_id === a.id),
         })),
       });
     } catch (err) {
@@ -637,44 +722,69 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     }
   });
 
-  // Ajusta um assistente. has_assistant liga/desliga o assistente de qualquer um dos 6 ministérios.
-  app.put('/api/admin/assistants/:code', authenticateToken, requireRole(['admin']), async (req, res) => {
+  // Cria um assistente: não é usuário (sem login, sem carteira), só escreve em nome de um ministério
+  app.post('/api/admin/assistants', authenticateToken, requireRole(['admin']), async (req, res) => {
     try {
-      const found = await pool.query('SELECT * FROM ministries WHERE code = $1', [req.params.code]);
-      if (found.rows.length === 0) return res.status(404).json({ error: 'Ministério não encontrado.' });
-      const cur = found.rows[0];
-      const b = req.body || {};
-      const text = (value, fallback, max) => (value === undefined ? fallback : String(value || '').trim().slice(0, max));
-      const next = {
-        has_assistant: b.has_assistant === undefined ? cur.has_assistant : (b.has_assistant ? 1 : 0),
-        assistant_enabled: b.assistant_enabled === undefined ? cur.assistant_enabled : (b.assistant_enabled ? 1 : 0),
-        posts_per_day: b.posts_per_day === undefined ? cur.posts_per_day : clampInt(b.posts_per_day, 0, 12, cur.posts_per_day),
-        suggestions_per_day: b.suggestions_per_day === undefined ? cur.suggestions_per_day : clampInt(b.suggestions_per_day, 0, 6, cur.suggestions_per_day),
-        assistant_name: text(b.assistant_name, cur.assistant_name, 120) || `Assistente do ${cur.name}`,
-        assistant_persona: text(b.assistant_persona, cur.assistant_persona, 1000),
-        assistant_context: text(b.assistant_context, cur.assistant_context, 3000) || null,
-      };
-      if (next.has_assistant && !next.assistant_persona) {
-        return res.status(400).json({ error: 'Descreva a personalidade do assistente antes de ativá-lo.' });
+      const count = await pool.query('SELECT COUNT(*) AS total FROM assistants');
+      if (Number(count.rows[0].total) >= MAX_ASSISTANTS) {
+        return res.status(400).json({ error: `Limite de ${MAX_ASSISTANTS} assistentes atingido (para não estourar a cota gratuita da IA).` });
       }
+      const next = assistantBody(req.body || {});
+      const invalid = await validateAssistant(next);
+      if (invalid) return res.status(400).json({ error: invalid });
+      const ins = await pool.query(
+        `INSERT INTO assistants (ministry_code, name, persona, context, enabled, posts_per_day, suggestions_per_day, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [next.ministry_code, next.name, next.persona, next.context, next.enabled, next.posts_per_day, next.suggestions_per_day, req.user.id]
+      );
+      await audit(req.user.id, 'assistants', ins.rows[0].id, 'create_assistant', next);
+      res.json({ success: true, id: ins.rows[0].id });
+    } catch (err) {
+      res.status(500).json({ error: 'Erro ao criar assistente: ' + err.message });
+    }
+  });
+
+  app.put('/api/admin/assistants/:id', authenticateToken, requireRole(['admin']), async (req, res) => {
+    try {
+      const found = await pool.query('SELECT * FROM assistants WHERE id = $1', [req.params.id]);
+      if (found.rows.length === 0) return res.status(404).json({ error: 'Assistente não encontrado.' });
+      const cur = found.rows[0];
+      const next = assistantBody(req.body || {}, cur);
+      const invalid = await validateAssistant(next);
+      if (invalid) return res.status(400).json({ error: invalid });
       await pool.query(
-        `UPDATE ministries SET has_assistant = $1, assistant_enabled = $2, posts_per_day = $3, suggestions_per_day = $4,
-                assistant_name = $5, assistant_persona = $6, assistant_context = $7 WHERE code = $8`,
-        [next.has_assistant, next.assistant_enabled, next.posts_per_day, next.suggestions_per_day,
-          next.assistant_name, next.assistant_persona || null, next.assistant_context, req.params.code]
+        `UPDATE assistants SET ministry_code = $1, name = $2, persona = $3, context = $4, enabled = $5,
+                posts_per_day = $6, suggestions_per_day = $7 WHERE id = $8`,
+        [next.ministry_code, next.name, next.persona, next.context, next.enabled, next.posts_per_day, next.suggestions_per_day, req.params.id]
       );
       // Desligar cancela as rodadas que ainda iam acontecer hoje
-      if (!next.has_assistant || !next.assistant_enabled) {
-        await pool.query("UPDATE assistant_runs SET status = 'skipped', error = 'Assistente desligado' WHERE ministry_code = $1 AND status = 'pending'", [req.params.code]);
+      if (!next.enabled) {
+        await pool.query("UPDATE assistant_runs SET status = 'skipped', error = 'Assistente desligado' WHERE assistant_id = $1 AND status = 'pending'", [req.params.id]);
+      } else if (next.ministry_code !== cur.ministry_code) {
+        await pool.query('UPDATE assistant_runs SET ministry_code = $1 WHERE assistant_id = $2 AND status = $3', [next.ministry_code, req.params.id, 'pending']);
       }
-      await audit(req.user.id, 'ministries', req.params.code, 'update_assistant', next, {
-        has_assistant: cur.has_assistant, assistant_enabled: cur.assistant_enabled, posts_per_day: cur.posts_per_day,
-        suggestions_per_day: cur.suggestions_per_day, assistant_name: cur.assistant_name,
-        assistant_persona: cur.assistant_persona, assistant_context: cur.assistant_context,
-      });
+      const { created_by, created_at, id, ...old } = cur;
+      await audit(req.user.id, 'assistants', req.params.id, 'update_assistant', next, old);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: 'Erro ao salvar assistente: ' + err.message });
+    }
+  });
+
+  // Excluir mantém as publicações já feitas (com o nome do assistente) e cancela agenda e tarefas
+  app.delete('/api/admin/assistants/:id', authenticateToken, requireRole(['admin']), async (req, res) => {
+    try {
+      const found = await pool.query('SELECT * FROM assistants WHERE id = $1', [req.params.id]);
+      if (found.rows.length === 0) return res.status(404).json({ error: 'Assistente não encontrado.' });
+      await pool.query('UPDATE feed_posts SET assistant_id = NULL WHERE assistant_id = $1', [req.params.id]);
+      await pool.query('DELETE FROM assistant_runs WHERE assistant_id = $1', [req.params.id]);
+      await pool.query('DELETE FROM assistant_tasks WHERE assistant_id = $1', [req.params.id]);
+      await pool.query('DELETE FROM assistants WHERE id = $1', [req.params.id]);
+      const { created_by, created_at, ...old } = found.rows[0];
+      await audit(req.user.id, 'assistants', req.params.id, 'delete_assistant', { deleted: true }, old);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Erro ao excluir assistente: ' + err.message });
     }
   });
 
@@ -685,14 +795,13 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     const kind = ['any', 'post', 'suggestion'].includes(b.kind) ? b.kind : 'any';
     if (!instructions) return res.status(400).json({ error: 'Descreva a tarefa.' });
     try {
-      const m = await pool.query('SELECT code, has_assistant FROM ministries WHERE code = $1', [b.ministry_code]);
-      if (m.rows.length === 0) return res.status(404).json({ error: 'Ministério não encontrado.' });
-      if (!m.rows[0].has_assistant) return res.status(400).json({ error: 'Este ministério não tem assistente ativo.' });
+      const assistant = await loadAssistant(b.assistant_id);
+      if (!assistant) return res.status(404).json({ error: 'Assistente não encontrado.' });
       const ins = await pool.query(
-        'INSERT INTO assistant_tasks (ministry_code, kind, instructions, created_by) VALUES ($1, $2, $3, $4) RETURNING id',
-        [b.ministry_code, kind, instructions, req.user.id]
+        'INSERT INTO assistant_tasks (ministry_code, assistant_id, kind, instructions, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [assistant.ministry_code, assistant.id, kind, instructions, req.user.id]
       );
-      await audit(req.user.id, 'assistant_tasks', ins.rows[0].id, 'create_task', { ministry: b.ministry_code, kind, instructions });
+      await audit(req.user.id, 'assistant_tasks', ins.rows[0].id, 'create_task', { assistant: assistant.name, kind, instructions });
       res.json({ success: true, id: ins.rows[0].id });
     } catch (err) {
       res.status(500).json({ error: 'Erro ao criar tarefa: ' + err.message });
@@ -717,12 +826,12 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
       const t = await pool.query("SELECT * FROM assistant_tasks WHERE id = $1 AND status = 'open'", [req.params.id]);
       if (t.rows.length === 0) return res.status(404).json({ error: 'Tarefa não encontrada ou já concluída.' });
       task = t.rows[0];
-      const m = await pool.query('SELECT * FROM ministries WHERE code = $1 AND has_assistant = 1', [task.ministry_code]);
-      if (m.rows.length === 0) return res.status(400).json({ error: 'Este ministério não tem assistente ativo.' });
+      const assistant = await loadAssistant(task.assistant_id);
+      if (!assistant) return res.status(404).json({ error: 'Assistente não encontrado.' });
       const kind = task.kind === 'suggestion' ? 'suggestion' : 'post';
-      const post = await generateFor(m.rows[0], kind, task);
+      const post = await generateFor(assistant, kind, task);
       await audit(req.user.id, 'feed_posts', post.id, kind === 'post' ? 'assistant_post_manual' : 'assistant_suggestion_manual', {
-        ministry: task.ministry_code, title: post.title, model: post.model, status: post.status, task_id: task.id,
+        assistant: assistant.name, title: post.title, model: post.model, status: post.status, task_id: task.id,
       });
       res.json({ success: true, post });
     } catch (err) {
@@ -751,18 +860,18 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
   });
 
   // Executa o assistente agora (botão de teste do painel). Não altera a agenda do dia.
-  app.post('/api/admin/assistants/:code/run', authenticateToken, requireRole(['admin']), async (req, res) => {
+  app.post('/api/admin/assistants/:id/run', authenticateToken, requireRole(['admin']), async (req, res) => {
     const kind = req.body && req.body.kind === 'suggestion' ? 'suggestion' : 'post';
     try {
-      const found = await pool.query('SELECT * FROM ministries WHERE code = $1 AND has_assistant = 1', [req.params.code]);
-      if (found.rows.length === 0) return res.status(404).json({ error: 'Assistente não encontrado.' });
-      const post = await generateFor(found.rows[0], kind);
+      const assistant = await loadAssistant(req.params.id);
+      if (!assistant) return res.status(404).json({ error: 'Assistente não encontrado.' });
+      const post = await generateFor(assistant, kind);
       await audit(req.user.id, 'feed_posts', post.id, kind === 'post' ? 'assistant_post_manual' : 'assistant_suggestion_manual', {
-        ministry: req.params.code, title: post.title, model: post.model, status: post.status,
+        assistant: assistant.name, title: post.title, model: post.model, status: post.status,
       });
       res.json({ success: true, post });
     } catch (err) {
-      await audit(req.user.id, 'ministries', req.params.code, 'assistant_failed', { kind, error: err.message.slice(0, 500), manual: true });
+      await audit(req.user.id, 'assistants', req.params.id, 'assistant_failed', { kind, error: err.message.slice(0, 500), manual: true });
       res.status(502).json({ error: err.message });
     }
   });
