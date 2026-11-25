@@ -467,6 +467,29 @@ export default function AssistentesControle({ api, showToast }) {
                 <button type="button" className="state-btn primary ctl-btn" disabled={savingModel || model === data.model} onClick={saveModel}>Salvar</button>
               </div>
               <span className="field-desc">Use modelos com “:free” no nome. Pode separar vários por vírgula: o primeiro é o principal e os outros entram se ele falhar. Deixe vazio para voltar ao padrão.</span>
+              {data.active_models && data.active_models.length > 0 && (
+                <span className="field-desc">Em uso agora: <b>{data.active_models.join(', ')}</b>. Se um modelo gratuito sair do ar, o servidor troca sozinho por outro gratuito disponível.</span>
+              )}
+              {data.free_models && data.free_models.length > 0 && (
+                <div className="ctl-free-models">
+                  <span className="field-desc">Gratuitos disponíveis no OpenRouter (toque para adicionar):</span>
+                  <div className="ctl-row">
+                    {data.free_models.map((id) => (
+                      <button
+                        type="button"
+                        key={id}
+                        className="ctl-free-chip"
+                        onClick={() => {
+                          const list = model.split(',').map((m) => m.trim()).filter(Boolean);
+                          if (!list.includes(id)) setModel([...list, id].join(','));
+                        }}
+                      >
+                        {id.replace(/:free$/, '')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

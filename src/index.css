@@ -3335,3 +3335,6 @@ label .ilc-icon, .audit-action-badge .ilc-icon, .audit-entity-badge .ilc-icon, .
   .memory-inner, .mission-bar span, .case-clock span { transition: none; }
   .case-timer.urgent { animation: none; }
 }
+.ctl-free-models { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.ctl-free-chip { background: var(--bg-2); border: 1px solid var(--border); color: var(--text); border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer; overflow-wrap: anywhere; text-align: left; }
+.ctl-free-chip:hover { border-color: var(--gold); color: var(--gold-light); }

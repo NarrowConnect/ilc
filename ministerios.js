@@ -21,7 +21,12 @@ const crypto = require('crypto');
 const { DB_PATH } = require('./db');
 
 const OPENROUTER_URL = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions'; // trocar só em testes
-const DEFAULT_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
+// Modelos gratuitos do OpenRouter mudam com frequência. Padrão conferido em 25/11/2026; se algum sair
+// do ar, o servidor consulta a lista de modelos ":free" e troca sozinho (veja resolveModels).
+const DEFAULT_MODEL = 'inclusionai/ling-3.2-flash:free,baidu/ernie-5.5-flash-preview:free,particle-ai/particle-1:free';
+const MODELS_URL = OPENROUTER_URL.replace(/\/chat\/completions$/, '/models');
+const FREE_LIST_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_MODELS = 3; // o OpenRouter aceita poucos modelos de reserva por chamada
 const TIMEZONE = 'America/Sao_Paulo';
 const TZ_SUFFIX = '-03:00'; // Brasília, sem horário de verão
 const WINDOW_START_HOUR = 7; // primeira publicação possível do dia (horário de Brasília)
@@ -88,10 +93,55 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     return (fromDb || process.env.OPENROUTER_MODEL || DEFAULT_MODEL).trim();
   }
 
+  // Lista pública de modelos gratuitos (":free"), guardada por 6 horas. null = não deu para consultar.
+  const freeCache = { at: 0, list: null };
+  async function freeModels(force = false) {
+    if (!force && freeCache.list && Date.now() - freeCache.at < FREE_LIST_TTL_MS) return freeCache.list;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20 * 1000);
+      const res = await fetch(MODELS_URL, { signal: controller.signal }).finally(() => clearTimeout(timer));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const list = (data.data || [])
+        .filter((m) => typeof m.id === 'string' && m.id.endsWith(':free'))
+        .map((m) => ({
+          id: m.id,
+          context_length: m.context_length || 0,
+          created: m.created || 0,
+          json: Array.isArray(m.supported_parameters) && (m.supported_parameters.includes('response_format') || m.supported_parameters.includes('structured_outputs')),
+        }))
+        // Melhores primeiro: aceitam JSON, contexto grande e mais novos
+        .sort((a, b) => (b.json - a.json) || ((b.context_length >= 32000) - (a.context_length >= 32000)) || (b.created - a.created));
+      freeCache.at = Date.now();
+      freeCache.list = list;
+    } catch (err) {
+      console.error('⚠️  Não deu para consultar os modelos gratuitos do OpenRouter:', err.message);
+      freeCache.at = Date.now() - FREE_LIST_TTL_MS + 10 * 60 * 1000; // tenta de novo em 10 min
+    }
+    return freeCache.list;
+  }
+
+  // Modelos que vão na chamada: os configurados que ainda estão gratuitos (modelos pagos escolhidos de
+  // propósito ficam). Se nenhum sobrar, usa os melhores gratuitos disponíveis agora.
+  async function resolveModels() {
+    const configured = (await getModelSetting()).split(',').map((m) => m.trim()).filter(Boolean);
+    const free = await freeModels();
+    if (!free || !free.length) return configured.slice(0, MAX_MODELS);
+    const freeIds = new Set(free.map((m) => m.id));
+    const kept = configured.filter((id) => !id.endsWith(':free') || freeIds.has(id));
+    for (const m of free) {
+      if (kept.length >= MAX_MODELS) break;
+      if (!kept.includes(m.id)) kept.push(m.id);
+    }
+    return kept.slice(0, MAX_MODELS);
+  }
+
   async function callOpenRouter(messages, { maxTokens = 700, temperature = 0.9 } = {}) {
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) throw new Error('OPENROUTER_API_KEY não configurada no servidor.');
-    const models = (await getModelSetting()).split(',').map((m) => m.trim()).filter(Boolean);
+    const models = await resolveModels();
+    if (!models.length) throw new Error('Nenhum modelo configurado.');
     const body = {
       model: models[0],
       messages,
@@ -126,6 +176,8 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
     try { data = JSON.parse(text); } catch (_) { /* resposta não-JSON */ }
     if (!res.ok || !data || data.error) {
       const msg = (data && data.error && (data.error.message || JSON.stringify(data.error))) || text.slice(0, 300);
+      // Modelo saiu do ar: atualiza a lista de gratuitos para a próxima tentativa
+      if (res.status === 404 || /not a valid model|no endpoints|not found/i.test(msg)) freeModels(true).catch(() => {});
       throw new Error(`OpenRouter respondeu ${res.status}: ${msg}`);
     }
     const choice = data.choices && data.choices[0];
@@ -845,6 +897,8 @@ function createMinisterios({ app, pool, authenticateToken, requireRole, applySco
         scheduler_enabled: process.env.ASSISTANTS_DISABLED !== 'true',
         model,
         default_model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
+        active_models: await resolveModels(),
+        free_models: ((await freeModels()) || []).slice(0, 12).map((m) => m.id),
         window: { start_hour: WINDOW_START_HOUR, end_hour: WINDOW_END_HOUR },
         pending_suggestions: Number(drafts.rows[0].total),
         max_assistants: MAX_ASSISTANTS,

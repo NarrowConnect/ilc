@@ -132,3 +132,17 @@ jobs:
           git add releases/android
           git commit -m "APK ${{ steps.ver.outputs.name }} publicado [skip ci]" || exit 0
           git push
+
+      # O servidor anuncia a versão do APK que está na cópia publicada dele. Sem um novo deploy depois do
+      # commit acima, o app continua vendo a versão anterior. Com o segredo EASYPANEL_DEPLOY_HOOK (URL do
+      # "Deploy Webhook" do serviço no Easypanel), o deploy acontece sozinho logo após publicar o APK.
+      - name: Redeploy do servidor (Easypanel)
+        if: steps.ver.outputs.skip != 'true' && steps.sign.outputs.signed == 'true'
+        env:
+          HOOK: ${{ secrets.EASYPANEL_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::notice::Defina o segredo EASYPANEL_DEPLOY_HOOK para o servidor anunciar o APK novo sem redeploy manual."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK" > /dev/null && echo "Deploy pedido ao Easypanel."

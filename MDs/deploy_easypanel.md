@@ -109,6 +109,14 @@ Em um banco novo, o servidor cria automaticamente o administrador:
 
 > **⚠️ IMPORTANTE**: troque essa senha logo após o primeiro login.
 
+### Deploy automático depois de cada APK novo
+
+O aviso de atualização do app usa o `releases/android/version.json` que está **no servidor**. O GitHub publica o APK num commit próprio alguns minutos depois do push; se o servidor não fizer deploy depois desse commit, o app continua vendo a versão anterior.
+
+1. No Easypanel, abra o serviço → **Deployments** → copie a **Deploy Webhook URL**.
+2. No GitHub: *Settings → Secrets and variables → Actions → New repository secret*, nome `EASYPANEL_DEPLOY_HOOK`, valor = a URL copiada.
+3. A partir daí o workflow "Android APK" pede o deploy sozinho logo depois de publicar o APK.
+
 ---
 
 ## Migração única dos dados do Supabase (apenas para quem vinha da versão antiga)
