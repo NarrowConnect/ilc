@@ -78,6 +78,8 @@ Em **Environment** do serviço:
 | `WAHA_BASE_URL` / `WAHA_API_KEY` / `WAHA_SESSION` / `WAHA_DEFAULT_CHAT_ID` | dados do WAHA | envio de eventos no grupo do WhatsApp |
 | `SEED_DEMO` | `false` | não cria cidadãos de demonstração no 1º boot |
 | `BACKUP_KEEP` | `7` | opcional: quantos backups diários manter |
+| `BACKUP_KEEP_MONTHLY` | `12` | opcional: quantos backups mensais manter |
+| `BACKUP_TOKEN` | string aleatória (32+ chars) | ativa o backup externo pelo GitHub Actions (mesmo valor do secret no GitHub) |
 | `NODE_ENV` | `production` | |
 | `PORT` | `3000` | |
 
@@ -132,10 +134,59 @@ Faça uma vez, na troca para esta versão:
 
 ## Backups
 
-- **Automático:** 1 cópia por dia em `/usr/src/app/data/backups/`, dentro do volume.
-- **Download manual (admin):** `GET /api/admin/backup`, com o token de um administrador, baixa uma cópia consistente do banco (`.db`).
-- **Cópia para fora da VPS:** recomendado. Configure o backup de volumes do Easypanel, ou baixe periodicamente pelo endpoint acima.
-- **Restaurar:** pare o serviço, substitua `ilc.db` no volume pelo arquivo de backup (apague `ilc.db-wal` e `ilc.db-shm`) e inicie de novo.
+São três camadas, para nada se perder:
+
+| Camada | Onde fica | Retenção |
+|--------|-----------|----------|
+| Backup de inicialização | `data/backups/inicio-*.db` (antes de cada deploy aplicar mudanças no schema) | últimos 5 |
+| Backup diário verificado | `data/backups/ilc-AAAA-MM-DD.db` + `ilc-mensal-AAAA-MM.db` | 7 diários + 12 mensais |
+| Backup externo (fora da VPS) | artifacts do workflow **Backup externo do banco** no GitHub, cifrados | 90 dias |
+
+Cada cópia passa por `PRAGMA integrity_check` antes de ser aceita.
+
+### Conferir se o volume está montado
+
+Se a pasta do banco não for um volume, **tudo some no próximo deploy**. O servidor avisa:
+
+- no log, com `🚨 ATENÇÃO: a pasta do banco NÃO é um volume montado`;
+- em `GET /api/admin/backup/status` (admin), no campo `volumeMounted`;
+- no workflow de backup externo, que fica vermelho e o GitHub manda e-mail.
+
+### Ativar o backup externo (GitHub Actions)
+
+1. Gere duas strings aleatórias (ex.: `openssl rand -hex 32`). Uma é o **token**, a outra a **senha de cifra**.
+2. Easypanel → serviço → **Environment**: `BACKUP_TOKEN=<token>` → **Deploy**.
+3. GitHub → repositório → Settings → Secrets and variables → Actions → *New repository secret*:
+   - `BACKUP_TOKEN` = o mesmo token;
+   - `BACKUP_PASSPHRASE` = a senha de cifra. **Guarde-a num gerenciador de senhas**: sem ela os backups externos não abrem.
+4. Aba **Actions** → *Backup externo do banco* → **Run workflow** para testar. Depois roda sozinho todo dia às 03:00 (Brasília).
+
+O repositório é público, por isso os arquivos ficam cifrados (AES-256-GCM).
+
+### Restaurar
+
+**A partir de um backup que está no volume** (console do Easypanel, aba *Console* do serviço):
+
+```sh
+ls -lh /usr/src/app/data/backups/
+cp /usr/src/app/data/backups/ilc-AAAA-MM-DD.db /usr/src/app/data/restaurar.db
+```
+
+Depois clique em **Restart**. Na inicialização o servidor confere o arquivo, guarda o banco atual em `backups/antes-da-restauracao-*.db` e troca. Se o arquivo for inválido, ele é recusado e o banco atual continua.
+
+**A partir de um backup externo (GitHub):**
+
+1. Baixe o artifact da execução desejada e descompacte.
+2. Decifre no seu computador: `BACKUP_PASSPHRASE='sua-senha' node scripts/backup-crypto.js decrypt ilc-AAAA-MM-DD.db.enc ilc.db`
+3. Envie como admin (o servidor verifica, reinicia e aplica sozinho):
+   ```sh
+   curl -X POST https://ilc.narrowconnect.com.br/api/admin/backup/restore \
+     -H "Authorization: Bearer <token-de-admin>" \
+     -H "Content-Type: application/octet-stream" --data-binary @ilc.db
+   ```
+   Se o serviço não voltar sozinho em alguns segundos, clique em **Restart** no Easypanel.
+
+**Download manual (admin):** `GET /api/admin/backup` baixa uma cópia consistente na hora.
 
 O arquivo `.db` pode ser aberto em qualquer visualizador SQLite, como o [DB Browser for SQLite](https://sqlitebrowser.org/).
 
